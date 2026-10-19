@@ -1,0 +1,40 @@
+{
+  "name": "foundry-autonomous-engine",
+  "version": "1.0.0",
+  "description": "Universal autonomous software engineering engine with tri-model consensus, LSP multiplexing, semantic AST patching, and autopoietic self-modification.",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "bin": {
+    "foundry": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.135.0",
+    "better-sqlite3": "^11.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-cpp": "^0.22.0",
+    "tree-sitter-go": "^0.21.0",
+    "tree-sitter-python": "^0.21.0",
+    "tree-sitter-rust": "^0.21.0",
+    "tree-sitter-typescript": "^0.21.2",
+    "typescript": "^5.6.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.5.4",
+    "ts-node": "^10.9.2",
+    "vitest": "^2.1.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

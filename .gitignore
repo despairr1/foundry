@@ -1,0 +1,32 @@
+# Secrets and per-install state: never published
+.env
+.env.*
+!.env.example
+.foundry/
+.foundry.log
+.foundry.log.*
+.foundry-freeze.json
+.foundry-memory.sqlite*
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Build output and dependencies
+node_modules/
+dist/
+coverage/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Demo output of offline runs and local scratch
+demo-output/
+nul
+*.lnk
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

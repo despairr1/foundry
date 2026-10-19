@@ -1,0 +1,49 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV GOPATH=/usr/local/go-workspace
+ENV PATH="/usr/local/cargo/bin:/usr/local/go/bin:/usr/local/go-workspace/bin:${PATH}"
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    gcc \
+    g++ \
+    cmake \
+    clang \
+    clangd \
+    pkg-config \
+    libssl-dev \
+    python3 \
+    python3-pip \
+    python3-venv \
+    ca-certificates \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tests run with --network none, so every runner the harness invokes must be installed globally here:
+# TypeScript tests execute via `ts-node --transpile-only <test>`.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g typescript ts-node @types/node typescript-language-server pyright
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --component rust-analyzer \
+    && chmod -R a+rwX /usr/local/cargo /usr/local/rustup
+
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://go.dev/dl/go1.24.5.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz && \
+    tar -C /usr/local -xzf /tmp/go.tar.gz && \
+    rm /tmp/go.tar.gz && \
+    go install golang.org/x/tools/gopls@latest && \
+    chmod -R a+rwX /usr/local/go-workspace
+
+RUN pip3 install --break-system-packages pytest hypothesis
+
+RUN useradd -m -s /bin/bash sandbox
+USER sandbox
+WORKDIR /workspace
+
+CMD ["/bin/bash"]
