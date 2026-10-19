@@ -188,6 +188,11 @@ class SelfImproveView(EngineRunView):
             if self.on_open_settings:
                 ctk.CTkButton(line, text="Settings", width=66, height=24, font=ctk.CTkFont(size=11), **CHIP,
                               command=self.on_open_settings).grid(row=0, column=1, padx=(8, 0))
+            if who == "OpenAI":
+                import webbrowser
+                from providers import billing_url
+                ctk.CTkButton(line, text="Add credits ↗", width=96, height=24, font=ctk.CTkFont(size=11), **CHIP,
+                              command=lambda: webbrowser.open(billing_url("openai"))).grid(row=0, column=2, padx=(6, 0))
             row += 1
             problems = [p for p in problems if p not in quota]
         if health and not problems and not quota:

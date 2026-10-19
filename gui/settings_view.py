@@ -14,8 +14,9 @@ import customtkinter as ctk
 import theme
 from access_rules import load_rules, set_rule
 from engine_run_view import CHIP, PRIMARY, THINKING_LEVELS, THINKING_PREF, DEFAULT_THINKING
-from providers import (OPENAI_ENDPOINT, PRESETS, SYNTHESIZER_PREF, add_provider, current_synthesizer, load_providers,
+from providers import (OPENAI_ENDPOINT, PRESETS, SYNTHESIZER_PREF, add_provider, billing_url, current_synthesizer, load_providers,
                        remove_provider, synthesizer_settings, test_provider, update_provider)
+import webbrowser
 from shell import Tooltip
 import skills as skill_store
 
@@ -283,6 +284,7 @@ class SettingsView(ctk.CTkFrame):
         test_btn = ctk.CTkButton(line, text="Save & Test", width=96, height=30, font=ctk.CTkFont(size=12), **PRIMARY,
                                  command=lambda: self._save_and_test(key, entry, provider, test_btn, status, models_target))
         test_btn.grid(row=0, column=2, padx=(6, 0))
+        self._billing_button(line, billing_url(provider), column=3)
         entry.bind("<Return>", lambda e: test_btn.invoke())
         return entry
 
@@ -510,6 +512,17 @@ class SettingsView(ctk.CTkFrame):
                           command=lambda: self._set_synthesizer(provider["id"])).grid(row=0, column=2, padx=(6, 0))
         ctk.CTkButton(line, text="Remove", width=70, height=30, font=ctk.CTkFont(size=12), **CHIP,
                       command=lambda: self._remove_provider(provider, is_writer)).grid(row=0, column=3, padx=(6, 0))
+        self._billing_button(line, billing_url(provider), column=4)
+
+    def _billing_button(self, master, url, column):
+        """Opens the provider's billing page (add credits, see spend) in the browser."""
+        if not url:
+            return None
+        btn = ctk.CTkButton(master, text="Billing ↗", width=78, height=30, font=ctk.CTkFont(size=12), **CHIP,
+                            command=lambda: webbrowser.open(url))
+        btn.grid(row=0, column=column, padx=(6, 0))
+        Tooltip(btn, url)
+        return btn
 
     def _remove_provider(self, provider, is_writer):
         if not messagebox.askyesno("Remove provider?", f"Remove {provider['name']}? Its key is removed from .env too."):

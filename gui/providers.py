@@ -30,6 +30,27 @@ PRESETS = [
 ]
 PRESET_BY_ID = {p[0]: p for p in PRESETS}
 
+# Where to add credits or see the bill, per provider (built-in keys and presets). Local servers have none.
+BILLING_URLS = {
+    "anthropic": "https://console.anthropic.com/settings/billing",
+    "gemini": "https://console.cloud.google.com/billing",
+    "openai": "https://platform.openai.com/settings/organization/billing/overview",
+    "deepseek": "https://platform.deepseek.com/top_up",
+    "openrouter": "https://openrouter.ai/settings/credits",
+    "groq": "https://console.groq.com/settings/billing",
+    "mistral": "https://console.mistral.ai/billing/",
+    "xai": "https://console.x.ai/",
+    "together": "https://api.together.ai/settings/billing",
+    "fireworks": "https://fireworks.ai/account/billing",
+}
+
+
+def billing_url(provider):
+    """provider: a built-in name ("anthropic", "gemini", "openai") or an added provider dict; None for local servers."""
+    if isinstance(provider, dict):
+        return provider.get("billingUrl") or BILLING_URLS.get(provider.get("preset", ""))
+    return BILLING_URLS.get(provider)
+
 
 def providers_path(root):
     return os.path.join(root, ".foundry", "providers.json")
