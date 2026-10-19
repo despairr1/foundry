@@ -293,7 +293,10 @@ class SettingsView(ctk.CTkFrame):
 
     def _save_and_test(self, key, entry, provider, button, status, models_target):
         value = entry.get().strip()
-        self._save({key: value}, note="Key saved")
+        updates = {key: value}
+        if key == "OPENAI_API_KEY" and current_synthesizer(self.root, self.config_manager)[0] == "openai":
+            updates["ASTRA_API_KEY"] = ""  # an older code-writer key must not shadow this one
+        self._save(updates, note="Key saved")
         if not value:
             status.configure(text="No key yet.", text_color=theme.TEXT_FAINT)
             return

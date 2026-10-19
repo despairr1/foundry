@@ -231,7 +231,8 @@ describe("Claude provider (SDK streaming)", () => {
     responses.push(streamResponse({ blocks: [{ type: "text", text: "a" }] }), streamResponse({ blocks: [{ type: "text", text: "b" }] }));
 
     await completeWithClaude(testConfig({ thinkingLevel: "xhigh" }), economics, { label: "t", prompt: "hi" });
-    await completeWithClaude(testConfig(), economics, { label: "t", prompt: "hi" });
+    // The user's own FOUNDRY_THINKING (from .env) must not leak into "not set".
+    await completeWithClaude({ ...testConfig(), thinkingLevel: undefined }, economics, { label: "t", prompt: "hi" });
 
     expect(requests[0].body.output_config).toEqual({ effort: "xhigh" });
     expect(requests[0].body.thinking).toBeUndefined(); // thinking is always on; only its depth is set

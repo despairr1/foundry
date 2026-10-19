@@ -342,6 +342,26 @@ class ConfigManager:
         self.save()
         return True, "Reset all settings to recommended defaults"
 
+    @staticmethod
+    def _openai_can_spend(key):
+        body = json.dumps({"model": "gpt-4.1-nano", "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1}).encode("utf-8")
+        req = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=body, method="POST",
+                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "Foundry"})
+        try:
+            with urllib.request.urlopen(req, timeout=15):
+                return True, "The key works and the account can spend: Foundry will use it to write code."
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")
+            if e.code == 429 and "insufficient_quota" in detail:
+                return False, ("The key is valid, but OpenAI says this key's account has no credits. Credits belong to an "
+                               "organization: make sure the key was created in the same organization (and project) where you added "
+                               "the $, and give OpenAI a few minutes after paying.")
+            if e.code in (403, 404):
+                return True, "The key is valid (the small test model isn't enabled for it, so spending couldn't be checked)."
+            return False, f"OpenAI HTTP {e.code}: {detail[:200]}"
+        except Exception as e:
+            return True, f"The key is valid (spending couldn't be checked: {e})."
+
     def test_connection(self, provider, custom_key=None, custom_url=None):
         """
         Test API connectivity for a given provider.
@@ -413,9 +433,10 @@ class ConfigManager:
                 url = "https://api.openai.com/v1/models"
                 req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}", "User-Agent": "Foundry-Dashboard"})
                 with urllib.request.urlopen(req, timeout=8) as resp:
-                    if resp.status == 200:
-                        return True, "Connected successfully! OpenAI API key is valid and responsive."
-                    return False, f"HTTP {resp.status}"
+                    if resp.status != 200:
+                        return False, f"HTTP {resp.status}"
+                # Listing models works even with no credits; a 1-token request (a tiny fraction of a cent) shows whether it can spend.
+                return self._openai_can_spend(key)
 
             # 5. DeepSeek
             elif provider == "deepseek":

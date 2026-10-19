@@ -90,6 +90,10 @@ export function parseThinkingLevel(value: string | undefined): ThinkingLevel | u
 }
 
 export function loadConfig(overrides: Partial<FoundryConfig> = {}): FoundryConfig {
+  // With OpenAI as the code writer (the default), the OpenAI key and model win; ASTRA_* is for a custom provider
+  // (Settings › API keys & providers sets FOUNDRY_SYNTHESIZER to its id). A stale ASTRA_API_KEY used to shadow
+  // a newly saved OPENAI_API_KEY.
+  const openAiWrites = (env("FOUNDRY_SYNTHESIZER") ?? "openai").toLowerCase() === "openai";
   const raw: Record<string, unknown> = {
     offlineMode: envBool("FOUNDRY_OFFLINE_MODE"),
 
@@ -106,8 +110,8 @@ export function loadConfig(overrides: Partial<FoundryConfig> = {}): FoundryConfi
     geminiMaxOutputTokens: envInt("GEMINI_MAX_OUTPUT_TOKENS"),
 
     // ASTRA_* is the role-specific setting; OPENAI_* is the shared fallback.
-    astraApiKey: env("ASTRA_API_KEY") ?? env("OPENAI_API_KEY"),
-    astraModel: env("ASTRA_MODEL") ?? env("OPENAI_MODEL"),
+    astraApiKey: openAiWrites ? env("OPENAI_API_KEY") ?? env("ASTRA_API_KEY") : env("ASTRA_API_KEY") ?? env("OPENAI_API_KEY"),
+    astraModel: openAiWrites ? env("OPENAI_MODEL") ?? env("ASTRA_MODEL") : env("ASTRA_MODEL") ?? env("OPENAI_MODEL"),
     astraBaseUrl: env("ASTRA_BASE_URL"),
     astraMaxCompletionTokens: envInt("ASTRA_MAX_TOKENS"),
 
