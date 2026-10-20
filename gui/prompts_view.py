@@ -118,7 +118,7 @@ class PromptsView(ProjectsView):
             return
         first, later = PLACEHOLDERS[self.studio_mode]
         self.placeholder.configure(text=f"{first if not self.messages else later}. Enter to send, Shift+Enter for a new line")
-        self.placeholder.place(x=17, y=13)
+        self.placeholder.place(x=0, y=0, anchor="nw")  # place() is relative to the text area, which already has the padding
 
     def refresh(self):
         super().refresh()

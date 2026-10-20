@@ -132,6 +132,7 @@ class ProjectsView(EngineRunView):
     was discussed to Foundry. The sidebar picks the folder (or + New project)."""
 
     go_text = "Send"
+    TEXT_PAD_X, TEXT_PAD_Y = 4, 6  # inside the text widget; the placeholder sits at the same spot
     examples = EXAMPLES
     chat_mode = "project"
 
@@ -212,13 +213,16 @@ class ProjectsView(EngineRunView):
         self.task_box.bind("<KeyPress>", self._on_key_press)
         self.task_box.bind("<KeyRelease>", lambda e: self._update_placeholder())
         self.task_box.bind("<<Paste>>", lambda e: self.after_idle(self._update_placeholder), add="+")
-        self.placeholder = ctk.CTkLabel(self.composer, text="", font=ctk.CTkFont(size=13), text_color=theme.TEXT_FAINT)
+        # The typed text and the placeholder share one baseline: same font, same padding, inside the same widget.
+        inner = self.task_box._textbox
+        inner.configure(padx=self.TEXT_PAD_X, pady=self.TEXT_PAD_Y)
+        import tkinter as tk
+        self.placeholder = tk.Label(inner, text="", font=inner.cget("font"), anchor="w", justify="left", borderwidth=0,
+                                    highlightthickness=0, padx=0, pady=0, cursor="xterm",
+                                    bg=theme.mode_color(theme.SURFACE), fg=theme.mode_color(theme.TEXT_FAINT))
         # A click anywhere in the rounded box (the placeholder, the padding, the empty bottom row) lands in the text.
         for widget in (self.placeholder, self.composer):
             widget.bind("<Button-1>", self._focus_composer, add="+")
-        for inner in (getattr(self.placeholder, "_label", None), getattr(self.placeholder, "_canvas", None)):
-            if inner is not None:
-                inner.configure(cursor="xterm")
 
         icon_button(self.composer, "+", "Add a file to your message", self._attach_file, size=30).grid(
             row=1, column=0, sticky="w", padx=(10, 0), pady=(2, 10))
@@ -495,7 +499,7 @@ class ProjectsView(EngineRunView):
         fresh = not self.messages and not load_journal(self.current_folder())
         lead = "Describe what you want to build" if fresh else "Reply, or describe what to change"
         self.placeholder.configure(text=f"{lead}. Enter to send, Shift+Enter for a new line")
-        self.placeholder.place(x=17, y=13)
+        self.placeholder.place(x=0, y=0, anchor="nw")  # place() is relative to the text area, which already has the padding
 
     # -------------------------------------------------------------- transcript
     def _render(self):
