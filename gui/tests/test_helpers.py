@@ -131,6 +131,27 @@ class ProvidersTest(unittest.TestCase):
         self.assertEqual([x["id"] for x in providers.load_providers(self.root)], ["deepseek"])
 
 
+class RolesTest(unittest.TestCase):
+    def test_roles_follow_settings(self):
+        import project_chat
+
+        class Cfg:
+            def __init__(self, **kw):
+                self.kw = kw
+
+            def get(self, k, d=""):
+                return self.kw.get(k, d)
+        self.assertEqual(project_chat.role_mapping(Cfg()), {"architect": "claude", "auditor": "gemini", "code writer": "openai"})
+        swapped = Cfg(FOUNDRY_ARCHITECT="openai", FOUNDRY_AUDITOR="claude", FOUNDRY_WRITER="bogus")
+        self.assertEqual(project_chat.role_mapping(swapped), {"architect": "openai", "auditor": "claude", "code writer": "openai"})
+        self.assertEqual(project_chat.agent_roles(swapped), {"claude": "auditor", "gemini": "", "openai": "architect, code writer"})
+        project_chat.refresh_roles(swapped)
+        self.assertEqual(project_chat.AGENT_ROLES["gemini"], "helper")
+        self.assertIn(("openai", "OpenAI · architect, code writer"), project_chat.AGENTS)
+        project_chat.refresh_roles(Cfg())  # back to the defaults for other tests
+        self.assertEqual(project_chat.AGENT_ROLES["claude"], "architect")
+
+
 class SkillsTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="foundry-skills-")

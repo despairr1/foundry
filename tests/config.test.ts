@@ -35,6 +35,38 @@ describe("thinking level", () => {
   });
 });
 
+describe("roles are a setting", () => {
+  const keys = ["FOUNDRY_ARCHITECT", "FOUNDRY_AUDITOR", "FOUNDRY_WRITER"] as const;
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  afterEach(() => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it("reads each role's model from the environment, with the classic mapping as the default", () => {
+    for (const k of keys) delete process.env[k];
+    const defaults = loadConfig();
+    expect([defaults.architectProvider, defaults.auditorProvider, defaults.writerProvider]).toEqual(["claude", "gemini", "openai"]);
+    process.env.FOUNDRY_ARCHITECT = "openai";
+    process.env.FOUNDRY_AUDITOR = "Anthropic";
+    process.env.FOUNDRY_WRITER = "nonsense";
+    const swapped = loadConfig();
+    expect([swapped.architectProvider, swapped.auditorProvider, swapped.writerProvider]).toEqual(["openai", "claude", "openai"]);
+  });
+
+  it("asks only for the keys the chosen models need", async () => {
+    const { missingCredentials } = await import("../src/config");
+    const base = loadConfig({ offlineMode: false, anthropicApiKey: "", geminiApiKey: "", astraApiKey: "" });
+    expect(missingCredentials({ ...base, architectProvider: "openai", auditorProvider: "openai", writerProvider: "openai", astraApiKey: "sk" })).toEqual([]);
+    expect(missingCredentials({ ...base, architectProvider: "openai", auditorProvider: "gemini", writerProvider: "openai", anthropicApiKey: "k" }))
+      .toEqual(["GEMINI_API_KEY (auditor)", "OPENAI_API_KEY (architect, code writer)"]);
+    // the code writer alone may fall back to Claude
+    expect(missingCredentials({ ...base, anthropicApiKey: "k", geminiApiKey: "g" })).toEqual([]);
+  });
+});
+
 describe("Gemini 4 Argon", () => {
   it("gets its own 32k output cap and a thinking level", async () => {
     const { geminiThinkingConfig } = await import("../src/swarm/providers");

@@ -2,7 +2,7 @@ import { FoundryConfig } from "../config";
 import { EconomicsEngine } from "../engine/economics";
 import { ModuleArchitectureContract, ModuleDependency, describeModuleDependencies } from "./claude_architect";
 import { describeTestHarness, pythonModulePath, typescriptImportPath } from "./harness";
-import { completeWithGemini } from "./providers";
+import { completeWithProvider } from "./providers";
 
 export interface TestSuiteSpec {
   moduleName: string;
@@ -56,7 +56,7 @@ export class GeminiAuditor {
       `Test only behavior the contract specifies. Return the complete test file in a single fenced code block and nothing else.`
     ].join("\n\n");
 
-    const testCode = await completeWithGemini<string>(this.config, this.economics, {
+    const testCode = await completeWithProvider<string>(this.config.auditorProvider, this.config, this.economics, {
       label: `GeminiAuditor[${contract.moduleName}]`,
       prompt,
       parse: (text) => {

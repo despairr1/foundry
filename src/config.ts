@@ -28,6 +28,11 @@ export const ConfigSchema = z.object({
   /** How hard the models think (Claude effort; the nearest level on Gemini and OpenAI). Unset: each model's default. */
   thinkingLevel: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
 
+  /** Which model holds which role. "openai" means the OpenAI key, or the custom provider chosen as ASTRA_*. */
+  architectProvider: z.enum(["claude", "gemini", "openai"]).default("claude"),
+  auditorProvider: z.enum(["claude", "gemini", "openai"]).default("gemini"),
+  writerProvider: z.enum(["claude", "gemini", "openai"]).default("openai"),
+
   requestTimeoutMs: z.number().int().positive().default(600000),
   requestMaxRetries: z.number().int().min(0).max(10).default(3),
 
@@ -78,6 +83,17 @@ function envBool(name: string): boolean | undefined {
   return value === "true" || value === "1" || value === "yes";
 }
 
+export type ModelRoleProvider = FoundryConfig["architectProvider"];
+export const ROLE_PROVIDERS: ModelRoleProvider[] = ["claude", "gemini", "openai"];
+
+export function parseRoleProvider(value: string | undefined): ModelRoleProvider | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "anthropic") return "claude";
+  if (normalized === "google") return "gemini";
+  if (normalized === "astra") return "openai";
+  return (ROLE_PROVIDERS as string[]).includes(normalized ?? "") ? (normalized as ModelRoleProvider) : undefined;
+}
+
 export type ThinkingLevel = NonNullable<FoundryConfig["thinkingLevel"]>;
 export const THINKING_LEVELS: ThinkingLevel[] = ["low", "medium", "high", "xhigh", "max"];
 
@@ -116,6 +132,9 @@ export function loadConfig(overrides: Partial<FoundryConfig> = {}): FoundryConfi
     astraMaxCompletionTokens: envInt("ASTRA_MAX_TOKENS"),
 
     thinkingLevel: parseThinkingLevel(env("FOUNDRY_THINKING")),
+    architectProvider: parseRoleProvider(env("FOUNDRY_ARCHITECT")),
+    auditorProvider: parseRoleProvider(env("FOUNDRY_AUDITOR")),
+    writerProvider: parseRoleProvider(env("FOUNDRY_WRITER")),
     requestTimeoutMs: envInt("REQUEST_TIMEOUT_MS"),
     requestMaxRetries: envInt("REQUEST_MAX_RETRIES"),
 
@@ -202,10 +221,18 @@ function anthropicSdkBaseUrl(url: string): string {
 export function missingCredentials(config: FoundryConfig): string[] {
   if (config.offlineMode) return [];
   const missing: string[] = [];
-  if (!config.anthropicApiKey) missing.push("ANTHROPIC_API_KEY (Lead Architect)");
-  if (!config.geminiApiKey) missing.push("GEMINI_API_KEY (Invariant Auditor)");
-  if (!config.astraApiKey && !config.anthropicApiKey) {
-    missing.push("ASTRA_API_KEY or OPENAI_API_KEY (Code Synthesizer)");
+  const roles: Array<[ModelRoleProvider, string]> = [
+    [config.architectProvider, "architect"],
+    [config.auditorProvider, "auditor"],
+    [config.writerProvider, "code writer"]
+  ];
+  const needs = (provider: ModelRoleProvider): string => roles.filter(([p]) => p === provider).map(([, r]) => r).join(", ");
+  if (needs("claude") && !config.anthropicApiKey) missing.push(`ANTHROPIC_API_KEY (${needs("claude")})`);
+  if (needs("gemini") && !config.geminiApiKey) missing.push(`GEMINI_API_KEY (${needs("gemini")})`);
+  if (needs("openai") && !config.astraApiKey) {
+    // The code writer alone may fall back to Claude; the architect or auditor on OpenAI needs the key.
+    const onlyWriter = config.architectProvider !== "openai" && config.auditorProvider !== "openai";
+    if (!(onlyWriter && config.anthropicApiKey)) missing.push(`OPENAI_API_KEY (${needs("openai")})`);
   }
   return missing;
 }

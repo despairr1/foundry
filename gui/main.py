@@ -34,7 +34,7 @@ from context_panel import ContextPanel
 import errors
 from engine_run_view import load_journal
 from launcher import describe_launcher, find_launcher, launcher_request
-from project_chat import chat_spend, load_chat
+from project_chat import chat_spend, load_chat, refresh_roles
 from project_list import forget_project, is_same_folder, load_projects, project_name, remember_project
 from prompt_store import STUDIO_MODES
 from shell import PageGroup, Sash, Sidebar, SidePane, TopBar, popup_menu
@@ -85,6 +85,7 @@ class FoundryIDE(ctk.CTk):
         # Workspace Root Directory
         self.workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         self.config_manager = ConfigManager(self.workspace_root)
+        refresh_roles(self.config_manager)  # chat menus and headers name each model's roles
 
         # Claude Code look; the theme must be in place before the root window is created
         mode = self.config_manager.get("UI_THEME_MODE", "Dark")
@@ -335,6 +336,7 @@ class FoundryIDE(ctk.CTk):
                            terminal=self.terminal, folder=folder,
                            on_prompt_used=lambda f: cell and self._on_prompt_used(cell[0], f),
                            on_use_prompt=self._use_prompt, on_start_job=self._start_job, on_send_step=self._send_step,
+                           on_run_command=self._run_ai_command,  # commands run in the attached folder after Run
                            on_open_settings=lambda: self.switch_view("settings"),
                            on_show_details=self._show_details,
                            on_status=lambda **kw: cell and self._on_run_status(cell[0], **kw))
@@ -385,7 +387,11 @@ class FoundryIDE(ctk.CTk):
         self.switch_view("projects")
 
     def _start_job(self, plan):
-        """Runs a job plan's steps as Builds, one after another, in a new project or one from the list."""
+        """Runs a job plan's steps as Builds, one after another: in the folder attached to the conversation, a new
+        project, or one from the list."""
+        attached = getattr(self.prompts_view, "project_folder", "") if self.prompts_view is not None else ""
+        if attached and os.path.isdir(attached):
+            return self._run_job_in(plan, attached)
         items = load_projects(self.workspace_root)
         if not items:
             return self._run_job_in(plan, None)
@@ -648,7 +654,8 @@ class FoundryIDE(ctk.CTk):
                                           on_restart=lambda: self.force_auto_restart("User Triggered Relaunch"),
                                           on_rules_changed=lambda rules: self.explorer.refresh_tree(),
                                           on_open_help=lambda: self.switch_view("help"),
-                                          on_open_file=self._open_file_in_editor)
+                                          on_open_file=self._open_file_in_editor,
+                                          on_roles_changed=self._on_roles_changed)
         self.help_view = HelpView(self.center, on_switch_view=self.switch_view)
         self.views.update(improve=self.improve_view, settings=self.settings_view, help=self.help_view)
 
@@ -990,6 +997,15 @@ class FoundryIDE(ctk.CTk):
     def _open_terminal_in(self, folder):
         self.open_pane("terminal")
         self.terminal.new_shell(folder)
+
+    def _on_roles_changed(self):
+        """Settings › AI models › Roles changed: open chat pages re-label their menus; Overview re-reads the roles."""
+        for view in self._all_chat_views():
+            try:
+                view._show_choices()
+            except Exception:
+                pass
+        self._refresh_overview()
 
     def _on_rules_changed(self, rules):
         if self.current_view == "settings":

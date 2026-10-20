@@ -7,7 +7,7 @@ import { SemanticPatch } from "../ast/semantic_patcher";
 import { logger } from "../utils/logger";
 import { normalizeWorkspacePath } from "../utils/paths";
 import { describeTestHarness, pythonModulePath, typescriptImportPath } from "./harness";
-import { completeWithAstra, completeWithClaude, extractJsonArray } from "./providers";
+import { completeWithAstra, completeWithClaude, completeWithProvider, extractJsonArray, PROVIDER_NAMES } from "./providers";
 
 const PATCH_ACTIONS = [
   "REPLACE_FUNCTION",
@@ -100,13 +100,22 @@ export class AstraSynthesizer {
 
     const request = { prompt, parse: parseSemanticPatches };
 
-    if (this.config.astraApiKey) {
+    // The code writer is a setting: OpenAI (or a custom provider through ASTRA_*), Gemini, or Claude.
+    // OpenAI and Gemini fall back to Claude when they fail and a Claude key exists.
+    const writer = this.config.writerProvider;
+    const primary = writer === "openai" ? (this.config.astraApiKey ? "openai" : null) : writer === "gemini" ? "gemini" : null;
+    if (primary) {
       try {
-        return await completeWithAstra<SemanticPatch[]>(this.config, this.economics, {
-          ...request,
-          label: `AstraSynthesizer[${params.branchId}]`,
-          jsonObject: true
-        });
+        return primary === "openai"
+          ? await completeWithAstra<SemanticPatch[]>(this.config, this.economics, {
+              ...request,
+              label: `AstraSynthesizer[${params.branchId}]`,
+              jsonObject: true
+            })
+          : await completeWithProvider<SemanticPatch[]>(primary, this.config, this.economics, {
+              ...request,
+              label: `${PROVIDER_NAMES[primary]}Synthesizer[${params.branchId}]`
+            });
       } catch (err) {
         if ((err as Error)?.name === "BudgetExceededError" || !this.config.anthropicApiKey) throw err;
         if ((err as Error)?.name === "QuotaExhaustedError") {

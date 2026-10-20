@@ -87,7 +87,7 @@ def list_prompts(root):
     return sorted(items, key=lambda item: item["updatedAt"], reverse=True)
 
 
-def touch(folder, title=None, mode=None):
+def touch(folder, title=None, mode=None, **extra):
     """Creates or updates the conversation's meta.json; returns it."""
     meta = load_meta(folder)
     meta.setdefault("createdAt", now_iso())
@@ -96,6 +96,8 @@ def touch(folder, title=None, mode=None):
         meta["title"] = title
     if mode:
         meta["mode"] = mode
+    for key, value in extra.items():  # e.g. project: the folder attached to the conversation
+        meta[key] = value
     meta.setdefault("title", "New prompt")
     meta.setdefault("mode", DEFAULT_MODE)
     save_meta(folder, meta)

@@ -497,7 +497,8 @@ export function createCliProgram(): Command {
             return finish("error", "AI access to this folder is blocked.", 0, `access-blocked: ${err.message}`);
           }
         }
-        const context = options.target && options.mode === "project" ? describeProject(path.resolve(options.target)) : "";
+        // A folder attached to a studio conversation gives the models the same project notes a project chat gets.
+        const context = options.target ? describeProject(path.resolve(options.target)) : "";
         const skills = skillsPrompt(config.foundryRootDir);
         const economics = new EconomicsEngine(config.maxBudgetUsd, config.freezeStatePath, false);
         const agents = options.agent === "all" ? CHAT_AGENTS : [options.agent];

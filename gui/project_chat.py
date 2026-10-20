@@ -21,6 +21,35 @@ AGENTS = [  # (engine name, label in the menu)
 AGENT_NAMES = {"claude": "Claude", "gemini": "Gemini", "openai": "OpenAI"}
 AGENT_ROLES = {"claude": "architect", "gemini": "auditor", "openai": "synthesizer"}
 SPEAKER_LABELS = {"claude": "Claude (architect)", "gemini": "Gemini (auditor)", "openai": "OpenAI (synthesizer)"}
+ROLE_KEYS = (("FOUNDRY_ARCHITECT", "architect", "claude"), ("FOUNDRY_AUDITOR", "auditor", "gemini"), ("FOUNDRY_WRITER", "code writer", "openai"))
+PROVIDER_CHOICES = ("claude", "gemini", "openai")
+
+
+def role_mapping(config_manager):
+    """{"architect": "claude", "auditor": "gemini", "code writer": "openai"} from the settings."""
+    out = {}
+    for key, role, default in ROLE_KEYS:
+        value = str(config_manager.get(key, default) or default).strip().lower()
+        out[role] = value if value in PROVIDER_CHOICES else default
+    return out
+
+
+def agent_roles(config_manager):
+    """{"claude": "architect", "gemini": "auditor, code writer", "openai": ""} under the configured roles."""
+    mapping = role_mapping(config_manager)
+    return {agent: ", ".join(role for role, who in mapping.items() if who == agent) for agent in PROVIDER_CHOICES}
+
+
+def refresh_roles(config_manager):
+    """Re-labels the menus and headers after the roles changed in Settings (the lists are shared, so edit in place)."""
+    roles = agent_roles(config_manager)
+    for agent, text in roles.items():
+        AGENT_ROLES[agent] = text or "helper"
+        SPEAKER_LABELS[agent] = f"{AGENT_NAMES[agent]} ({AGENT_ROLES[agent]})"
+    for idx, (name, _label) in enumerate(AGENTS):
+        if name in roles:
+            AGENTS[idx] = (name, f"{AGENT_NAMES[name]} · {AGENT_ROLES[name]}")
+    return roles
 
 MAX_TASK_TRANSCRIPT = 12000  # keeps `go --task` well under the Windows command-line limit
 

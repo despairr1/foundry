@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { FoundryConfig } from "../config";
 import { EconomicsEngine } from "../engine/economics";
-import { completeWithClaude, completeWithGemini, extractJson, extractJsonArray } from "../swarm/providers";
+import { completeWithProvider, extractJson, extractJsonArray, hasKeyFor } from "../swarm/providers";
 import { logger } from "../utils/logger";
 import { toPosixRelative } from "../utils/paths";
 
@@ -214,7 +214,7 @@ export async function chooseImprovement(config: FoundryConfig, economics: Econom
   if (config.offlineMode) {
     return { candidate: OFFLINE_CANDIDATE, reason: "offline demo", candidates: [OFFLINE_CANDIDATE] };
   }
-  const candidates = await completeWithClaude<ImprovementCandidate[]>(config, economics, {
+  const candidates = await completeWithProvider<ImprovementCandidate[]>(config.architectProvider, config, economics, {
     label: "Scout[propose]",
     prompt: scoutPrompt(evidence),
     parse: parseCandidates
@@ -222,11 +222,11 @@ export async function chooseImprovement(config: FoundryConfig, economics: Econom
   let index = 0;
   let reason = "";
   if (candidates.length > 1) {
-    if (!config.geminiApiKey) {
-      reason = "no Gemini key, so the architect's first choice stands";
+    if (!hasKeyFor(config, config.auditorProvider)) {
+      reason = "no key for the auditor's model, so the architect's first choice stands";
     } else {
       try {
-        ({ index, reason } = await completeWithGemini<{ index: number; reason: string }>(config, economics, {
+        ({ index, reason } = await completeWithProvider<{ index: number; reason: string }>(config.auditorProvider, config, economics, {
           label: "Scout[rank]",
           prompt: rankPrompt(candidates, evidence),
           parse: (text) => parseChoice(text, candidates.length)

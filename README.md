@@ -6,6 +6,8 @@ Foundry is an autonomous software-engineering engine with a desktop app. You des
 - **Gemini** is the auditor: it writes the tests first, from the module's contract.
 - **OpenAI** (or any OpenAI-compatible provider you add) is the code writer: it implements until the tests pass. Without an OpenAI key, Claude writes the code too.
 
+Which model holds which role is a setting (**Settings › AI models › Roles**): any of the three can be the architect, the auditor or the code writer.
+
 A module passes only when its tests pass, catch at least 85% of deliberately broken copies of the code (mutation testing), and the language server reports no errors. Languages it can test: TypeScript, Python, Rust, Go, C++.
 
 ## Install
@@ -35,7 +37,7 @@ python gui/main.py
 **Improve** runs the same loop on Foundry's own engine: it checks its health (type-check, test suite, recent log problems), scouts for one small, checkable improvement, builds it, and keeps it only if the full test suite still passes. Every round is remembered; **Undo** rolls one back.
 
 ### The prompt studio
-**+ New prompt** opens a chat whose product is a prompt. In **Foundry job** mode, Claude splits a big job into Build-sized steps with a thinking level and budget each, and **Start this job** runs them one after another. In **Any model** mode it writes prompts for Claude, GPT, Gemini, image models or agents.
+**+ New prompt** opens a chat whose product is a prompt. Attach a folder under the message box and the models can look at it (and run commands there after you click Run). In **Foundry job** mode, the architect splits a big job into Build-sized steps with a thinking level and budget each, and **Start this job** runs them one after another. In **Any model** mode it writes prompts for Claude, GPT, Gemini, image models or agents.
 
 ### Skills
 `skills/<name>/SKILL.md` files hold instructions the models follow when they apply (clean code, test first, error handling, security review, a language's style, prompt writing...). Enable them, add your own or write new ones under **Settings › Skills**.

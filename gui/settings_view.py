@@ -61,7 +61,7 @@ def _bool(value):
 
 class SettingsView(ctk.CTkFrame):
     def __init__(self, master, config_manager, workspace_root=None, on_theme_change=None, on_run_check=None,
-                 on_restart=None, on_rules_changed=None, on_open_help=None, on_open_file=None, **kwargs):
+                 on_restart=None, on_rules_changed=None, on_open_help=None, on_open_file=None, on_roles_changed=None, **kwargs):
         super().__init__(master, corner_radius=0, fg_color=theme.BG, **kwargs)
         self.config_manager = config_manager
         self.root = workspace_root or config_manager.workspace_root
@@ -71,6 +71,7 @@ class SettingsView(ctk.CTkFrame):
         self.on_rules_changed = on_rules_changed
         self.on_open_help = on_open_help
         self.on_open_file = on_open_file
+        self.on_roles_changed = on_roles_changed
         self.current = None
         self._flash_job = None
         self._model_boxes = {}
@@ -387,28 +388,38 @@ class SettingsView(ctk.CTkFrame):
 
     # ============================================================ AI models
     def _page_models(self):
-        self._title("AI models", "Who does what. Claude designs (the architect), Gemini checks (the auditor), and the code writer "
-                                 "(the synthesizer) writes the code: OpenAI, or any provider you add under API keys & providers.")
+        self._title("AI models", "Three roles, any model in each: the architect designs the plan, the auditor writes the tests "
+                                 "first, the code writer implements. Give each role to Claude, Gemini or OpenAI (OpenAI can also "
+                                 "mean a provider you add under API keys & providers).")
+        self._section("Roles")
+        provider_options = [("claude", "Claude"), ("gemini", "Gemini"), ("openai", "OpenAI (or the provider below)")]
+        self._choice("FOUNDRY_ARCHITECT", "Architect", provider_options, "Turns a request into the plan of modules and starts Builds from the chat.",
+                     default="claude", on_change=self._roles_changed)
+        self._choice("FOUNDRY_AUDITOR", "Auditor", provider_options, "Writes each module's tests first and reviews plans in the prompt studio.",
+                     default="gemini", on_change=self._roles_changed)
+        self._choice("FOUNDRY_WRITER", "Code writer", provider_options, "Implements each module until the tests pass. OpenAI or Gemini fall back "
+                     "to Claude when they fail and a Claude key exists.", default="openai", on_change=self._roles_changed)
         self._section("Thinking")
         self._choice(THINKING_PREF, "How hard the models think", [(v, f"{label} · {hint}") for v, label, hint in THINKING_LEVELS],
                      "The same setting as under a chat's message box and on Improve. Higher is more careful, slower and costs more.",
                      default=DEFAULT_THINKING, width=260)
-        self._section("Architect · Claude")
+        self._section("Claude")
         self._model_row("ANTHROPIC_MODEL", "Model", CLAUDE_MODELS, "claude-fable-5-1", "anthropic")
         self._entry("ANTHROPIC_MAX_TOKENS", "Longest reply (tokens)", "Replies cut off at this length fail the request. Claude also writes code "
                     "when OpenAI is unavailable, so 65536 is the safe default; 16000 truncated module code.", default="65536", kind="int")
         self._switch("ANTHROPIC_REFUSAL_FALLBACKS", "Server-side fallback on a refusal",
                      "When Claude declines, the API may retry with its default routing. Only on api.anthropic.com.", default="true")
-        self._section("Auditor · Gemini")
+        self._section("Gemini")
         self._model_row("GEMINI_MODEL", "Model", GEMINI_MODELS, "gemini-3.1-pro-preview", "gemini")
         self._entry("GEMINI_MAX_OUTPUT_TOKENS", "Longest reply (tokens)", "Leave empty for the model's full window (65,536 on thinking models).",
                     default="", kind="optional-int", placeholder="automatic")
         self._entry("GEMINI_EMBEDDING_MODEL", "Memory embeddings", "The Gemini model that indexes Foundry's memory of past fixes.",
                     default="gemini-embedding-2", width=200)
-        self._section("Code writer · the synthesizer")
+        self._section("OpenAI, or another provider in its place")
         choices = [("openai", "OpenAI")] + [(p["id"], p["name"]) for p in load_providers(self.root)]
-        self._choice(SYNTHESIZER_PREF, "Who writes the code", choices,
-                     "OpenAI with your OpenAI key, or a provider you added. Without any key here, Claude writes the code too.",
+        self._choice(SYNTHESIZER_PREF, "Which provider \"OpenAI\" means", choices,
+                     "OpenAI with your OpenAI key, or a provider you added under API keys & providers (DeepSeek, a local model...). "
+                     "It takes every role given to OpenAI above.",
                      default="openai", on_change=self._set_synthesizer, width=220)
         choice, provider = current_synthesizer(self.root, self.config_manager)
         if provider:
@@ -444,6 +455,12 @@ class SettingsView(ctk.CTkFrame):
         box.bind("<Return>", commit)
         box.pack()
         return box
+
+    def _roles_changed(self, _value=None):
+        from project_chat import refresh_roles
+        refresh_roles(self.config_manager)
+        if self.on_roles_changed:
+            self.on_roles_changed()
 
     def _set_synthesizer(self, choice):
         updates = synthesizer_settings(self.root, self.config_manager, choice)

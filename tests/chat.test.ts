@@ -5,7 +5,7 @@ import * as os from "os";
 import * as path from "path";
 import { loadConfig } from "../src/config";
 import { EconomicsEngine } from "../src/engine/economics";
-import { chatSystemPrompt, composeChatPrompt, describeFoundryPipeline, formatTranscript, offlineChatReply, replyToChat } from "../src/swarm/chat";
+import { chatSystemPrompt, composeChatPrompt, describeFoundryPipeline, formatTranscript, offlineChatReply, replyToChat, rolesOf } from "../src/swarm/chat";
 
 const conversation = [
   { role: "user" as const, text: "A to-do list app for the command line" },
@@ -45,6 +45,21 @@ describe("project chat", () => {
     expect(chatSystemPrompt("gemini")).toContain("only after the user clicks Run");
   });
 
+  it("gives a model the instructions of the roles it holds, whichever model that is", () => {
+    const swapped = { architectProvider: "openai" as const, auditorProvider: "claude" as const, writerProvider: "gemini" as const };
+    expect(rolesOf("openai", swapped)).toEqual(["architect"]);
+    expect(rolesOf("claude", swapped)).toEqual(["auditor"]);
+    expect(rolesOf("gemini", { ...swapped, auditorProvider: "gemini" })).toEqual(["auditor", "synthesizer"]);
+    const openaiArchitect = chatSystemPrompt("openai", "win32", "project", rolesOf("openai", swapped));
+    expect(openaiArchitect).toContain("You are OpenAI, the architect.");
+    expect(openaiArchitect).toContain("```build");
+    const claudeAuditor = chatSystemPrompt("claude", "win32", "project", rolesOf("claude", swapped));
+    expect(claudeAuditor).toContain("You are Claude, the auditor.");
+    expect(claudeAuditor).not.toContain("```build");
+    expect(chatSystemPrompt("gemini", "win32", "project", [])).toContain("second opinion");
+    expect(offlineChatReply("openai", [{ role: "user", text: "A weather app" }, { role: "user", text: "build it" }], "project", ["architect"])).toContain("```build");
+  });
+
   it("lets only the architect start builds", () => {
     expect(chatSystemPrompt("claude")).toContain("```build");
     expect(chatSystemPrompt("gemini")).not.toContain("```build");
@@ -64,6 +79,14 @@ describe("project chat", () => {
     const ask = [{ role: "user" as const, text: "A prompt that summarizes meeting notes" }];
     expect(offlineChatReply("claude", ask, "prompt")).toContain("```prompt\n");
     expect(offlineChatReply("claude", ask, "prompt")).not.toContain("```build");
+  });
+
+  it("lets studio conversations use a folder's commands only when one is attached", () => {
+    expect(chatSystemPrompt("claude", "win32", "job")).not.toContain("```run");
+    const attached = chatSystemPrompt("claude", "win32", "job", ["architect"], true);
+    expect(attached).toContain("```run");
+    expect(attached).toContain("A folder is attached");
+    expect(chatSystemPrompt("claude", "win32", "prompt", ["architect"], true)).toContain("```run");
   });
 
   it("has a job mode whose planner knows how Foundry builds and answers with a foundry plan", () => {

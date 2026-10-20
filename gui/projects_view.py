@@ -618,7 +618,7 @@ class ProjectsView(EngineRunView):
         state = (message.get("ran") or {}).get(str(index))
         card = ctk.CTkFrame(master, corner_radius=8, fg_color=theme.CODE_BG, border_width=1, border_color=theme.BORDER)
         card.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(card, text=f"›_  {AGENT_NAMES[agent]} wants to run this in the project folder", font=ctk.CTkFont(size=11),
+        ctk.CTkLabel(card, text=f"›_  {AGENT_NAMES[agent]} wants to run this in {os.path.basename(self.run_folder()) or 'the folder'}", font=ctk.CTkFont(size=11),
                      text_color=theme.TEXT_FAINT, anchor="w").grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 0))
         label = self._text(card, command, size=12, mono=True, bg=theme.CODE_BG)
         label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 6))
@@ -700,10 +700,14 @@ class ProjectsView(EngineRunView):
                 return candidate
         return message
 
+    def run_folder(self):
+        """Where a proposed command runs: the project (the studio overrides this with its attached folder)."""
+        return self.current_folder()
+
     def _run_proposed(self, message, index, command, agent):
         if not self.on_run_command:
             return
-        folder = self.current_folder()
+        folder = self.run_folder()
         if is_blocked(self.workspace_root, folder):
             messagebox.showinfo("Foundry", blocked_message(folder))
             return

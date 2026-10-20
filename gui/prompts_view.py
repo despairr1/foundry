@@ -15,6 +15,8 @@ from project_chat import chat_path, load_chat
 from projects_view import ProjectsView
 from prompt_store import (DEFAULT_MODE, STUDIO_MODES, delete_prompt, latest_block, list_prompts, load_meta, new_prompt_folder,
                           parse_job_plan, set_title, title_for, touch)
+from access_rules import blocked_message, is_blocked
+from tkinter import filedialog, messagebox
 from shell import Tooltip, icon_button, popup_menu
 
 TITLES = {
@@ -54,8 +56,11 @@ class PromptsView(ProjectsView):
     def __init__(self, master, workspace_root, config_manager, terminal, folder=None, on_prompt_used=None, on_use_prompt=None,
                  on_start_job=None, on_send_step=None, **kwargs):
         folder = folder or new_prompt_folder(workspace_root)
-        saved = load_meta(folder).get("mode")
+        meta = load_meta(folder)
+        saved = meta.get("mode")
         self.studio_mode = saved if saved in [m for m, _, _ in STUDIO_MODES] else DEFAULT_MODE
+        attached = str(meta.get("project") or "")
+        self.project_folder = attached if attached and os.path.isdir(attached) else ""
         self.examples = EXAMPLES[self.studio_mode]
         super().__init__(master, workspace_root, config_manager, terminal, folder=folder, new=not load_chat(folder),
                          on_project_used=on_prompt_used, on_use_prompt=on_use_prompt, on_start_job=on_start_job,
@@ -69,8 +74,42 @@ class PromptsView(ProjectsView):
         self.mode_button = self._flat_button(self.under, "", self._mode_menu)
         self.mode_button.grid(row=0, column=2, sticky="w", padx=(4, 0))
         Tooltip(self.mode_button, "What the studio makes: a job plan for Foundry, or a prompt for any model")
+        self.attach_button = self._flat_button(self.under, "", self._attach_menu)
+        self.attach_button.grid(row=0, column=5, sticky="w", padx=(4, 0))
+        self.under.grid_columnconfigure(3, weight=1)
+        Tooltip(self.attach_button, "Attach a folder: the models see what is in it and can propose commands that run there "
+                                    "(after you click Run); Start this job runs the plan in it.")
+        self._show_attached()
         self.go_tip.text = "Send (Enter). Claude writes the plan or prompt; ask for changes until it is right."
         self._show_mode()
+
+    def _show_attached(self):
+        name = os.path.basename(os.path.normpath(self.project_folder)) if self.project_folder else ""
+        self.attach_button.configure(text=f"▸ {name}  ⌄" if name else "Folder: none  ⌄")
+
+    def _attach_menu(self):
+        items = [("Attach a folder…", self.attach_folder)]
+        if self.project_folder:
+            items += [("Show in Explorer", lambda: self.open_folder(self.project_folder)), None, ("Detach the folder", lambda: self.set_project_folder(""))]
+        self._menu_below(self.attach_button, items)
+
+    def attach_folder(self):
+        start = self.project_folder or os.path.expanduser("~")
+        chosen = filedialog.askdirectory(initialdir=start, title="Attach a folder for the models to look at")
+        if chosen:
+            self.set_project_folder(os.path.normpath(chosen))
+
+    def set_project_folder(self, folder):
+        if folder and is_blocked(self.workspace_root, folder):
+            messagebox.showinfo("Foundry", blocked_message(folder))
+            return
+        self.project_folder = folder
+        self._show_attached()
+        if os.path.isdir(self.current_folder()):
+            touch(self.current_folder(), project=folder)
+
+    def run_folder(self):
+        return self.project_folder or self.current_folder()
 
     def _show_mode(self):
         label = next((text for mode, text, _ in STUDIO_MODES if mode == self.studio_mode), STUDIO_MODES[0][1])
@@ -135,8 +174,9 @@ class PromptsView(ProjectsView):
         return False
 
     def _chat_command(self, agent, folder):
+        target = ["--target", self.project_folder] if self.project_folder else []
         return [self.node_path(), self.engine_entry(), "chat", "--conversation", chat_path(folder), "--agent", agent,
-                "--mode", self.studio_mode, "--budget-usd", self.chat_limit(), "--progress"] + self.thinking_args()
+                "--mode", self.studio_mode, "--budget-usd", self.chat_limit(), "--progress"] + target + self.thinking_args()
 
     def _start_requested_build(self, message, force=False):
         return  # the studio never builds by itself; Start this job runs the plan in a project
@@ -147,7 +187,7 @@ class PromptsView(ProjectsView):
     def _name_new_project(self, text):
         """The first message names the conversation, like a Claude session's title."""
         if not self.messages:
-            touch(self.current_folder(), title=title_for(text), mode=self.studio_mode)
+            touch(self.current_folder(), title=title_for(text), mode=self.studio_mode, project=self.project_folder)
 
     def _record(self, folder, message):
         super()._record(folder, message)

@@ -4,7 +4,7 @@ import { EconomicsEngine } from "../engine/economics";
 import { SupportedLanguage } from "../ast/parser";
 import { normalizeWorkspacePath } from "../utils/paths";
 import { BRANCH_STRATEGIES, describeTestHarness } from "./harness";
-import { completeWithClaude, extractJson, extractJsonArray } from "./providers";
+import { completeWithProvider, extractJson, extractJsonArray } from "./providers";
 
 export interface StateSchema {
   name: string;
@@ -247,7 +247,7 @@ export class ClaudeArchitect {
       ].join("\n")
     ].join("\n\n");
 
-    return completeWithClaude<ModuleArchitectureContract[]>(this.config, this.economics, {
+    return completeWithProvider<ModuleArchitectureContract[]>(this.config.architectProvider, this.config, this.economics, {
       label: "ClaudeArchitect[plan]",
       prompt,
       parse: (text) => parseArchitectureContracts(text, params.language)
@@ -290,7 +290,7 @@ export class ClaudeArchitect {
       ].join("\n")
     ].join("\n\n");
 
-    return completeWithClaude<ModuleArchitectureContract>(this.config, this.economics, {
+    return completeWithProvider<ModuleArchitectureContract>(this.config.architectProvider, this.config, this.economics, {
       label: `ClaudeArchitect[${params.branchId}:${planned.moduleName}]`,
       prompt,
       parse: (text) => parseBranchModuleDesign(text, planned)

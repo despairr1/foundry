@@ -29,6 +29,11 @@ DEFAULT_CONFIG = {
     "ASTRA_OUTPUT_PRICE_PER_M": "",
     "FOUNDRY_SYNTHESIZER": "openai",
 
+    # Who holds which role: claude, gemini or openai (openai = the OpenAI key or the custom provider chosen as the code writer)
+    "FOUNDRY_ARCHITECT": "claude",
+    "FOUNDRY_AUDITOR": "gemini",
+    "FOUNDRY_WRITER": "openai",
+
     # Thinking and requests
     "FOUNDRY_THINKING": "high",
     "REQUEST_TIMEOUT_MS": "600000",
@@ -214,6 +219,7 @@ class ConfigManager:
                     "GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_EMBEDDING_MODEL", "GEMINI_BASE_URL", "GEMINI_MAX_OUTPUT_TOKENS",
                     "OPENAI_API_KEY", "OPENAI_MODEL", "ASTRA_API_KEY", "ASTRA_MODEL", "ASTRA_BASE_URL", "ASTRA_MAX_TOKENS",
                     "ASTRA_INPUT_PRICE_PER_M", "ASTRA_OUTPUT_PRICE_PER_M", "FOUNDRY_SYNTHESIZER",
+                    "FOUNDRY_ARCHITECT", "FOUNDRY_AUDITOR", "FOUNDRY_WRITER",
                     "FOUNDRY_THINKING", "REQUEST_TIMEOUT_MS", "REQUEST_MAX_RETRIES"
                 ],
                 "Spending limits": ["MAX_BUDGET_USD", "MAX_MODULE_BUDGET_USD", "UI_SELF_IMPROVE_LIMIT", "FOUNDRY_CHAT_BUDGET_USD"],

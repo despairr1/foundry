@@ -195,6 +195,7 @@ In the Editor (✎ at the top right), **Add Context** puts the open file into th
 For a job that is too big or too vague for one Build. Say what you want made; Claude, who knows how Foundry builds (one implementation file plus one test file per module, tests written first, mutation testing, no network in tests, the 12,000-character request cap, one Build at a time), splits it into an ordered list of steps, each a complete Build request with its own Thinking level and spending limit, so the whole job runs faster and cheaper than one sprawling Build. The plan shows as a **Job plan** card:
 - **▶ Start this job**: runs the steps as Builds, one after another, in a new project or one from your list. Each step sets its Thinking level and Build limit, and shows as a line in the project's chat. A step that doesn't finish pauses the job: tell Claude what to fix, then **Continue job** (or **Skip step**).
 - **Send to project**: puts one step into a project's message box, settings included, for you to edit or send.
+- **Folder: none ⌄** (under the box): attach a folder. The models then see what is in it (new or existing project, its earlier runs) and can propose commands that run there once you click **Run**, so a plan can be built from the real files; **Start this job** runs the plan in that folder. The folder is saved with the conversation, and AI-access rules apply.
 - Switch the model under the box to **Gemini** for a review of the plan (steps that are too big, untestable, out of order) or **OpenAI** for a different split.
 
 ### Any model

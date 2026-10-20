@@ -8,6 +8,7 @@ import customtkinter as ctk
 import theme
 from engine_run_view import OUTCOME_COLORS, OUTCOME_ICONS, format_money
 from providers import current_synthesizer
+from project_chat import agent_roles
 
 OUTCOME_WORDS = {"done": "finished", "not-finished": "not finished", "spending-limit": "hit the spending limit",
                  "stopped": "stopped by you", "error": "error", "undone": "undone"}
@@ -157,7 +158,9 @@ class OverviewPanel(ctk.CTkScrollableFrame):
         get = lambda k: str(self.config_manager.get(k, "") or os.environ.get(k, "")).strip()
         offline = get("FOUNDRY_OFFLINE_MODE").lower() == "true"
         _choice, provider = current_synthesizer(self.config_manager.workspace_root, self.config_manager)
+        roles = agent_roles(self.config_manager)
         for idx, (label, role, keys, model_key) in enumerate(MODELS):
+            role = roles.get({"Claude": "claude", "Gemini": "gemini", "OpenAI": "openai"}[label], role) or "not used"
             if label == "OpenAI" and provider:
                 label, keys, model_key = provider["name"], ("ASTRA_API_KEY",), "ASTRA_MODEL"
             # An OpenAI key is optional: without one, Claude also does the synthesizer's job.

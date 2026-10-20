@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { FoundryConfig, ThinkingLevel } from "../config";
+import { FoundryConfig, ModelRoleProvider, ThinkingLevel } from "../config";
 import { EconomicsEngine } from "../engine/economics";
 import { NonRetryableError, withExponentialBackoff } from "../utils/logger";
 
@@ -389,6 +389,27 @@ export async function completeWithAstra<T = string>(
     },
     backoffOptions(config)
   );
+}
+
+/** Does the configured key for a role's model exist? */
+export function hasKeyFor(config: FoundryConfig, provider: ModelRoleProvider): boolean {
+  if (provider === "claude") return !!config.anthropicApiKey;
+  if (provider === "gemini") return !!config.geminiApiKey;
+  return !!config.astraApiKey;
+}
+
+export const PROVIDER_NAMES: Record<ModelRoleProvider, string> = { claude: "Claude", gemini: "Gemini", openai: "OpenAI" };
+
+/** One completion with whichever model a role is assigned to (Settings › AI models › Roles). */
+export async function completeWithProvider<T = string>(
+  provider: ModelRoleProvider,
+  config: FoundryConfig,
+  economics: EconomicsEngine,
+  request: CompletionRequest & { jsonObject?: boolean }
+): Promise<T> {
+  if (provider === "claude") return completeWithClaude<T>(config, economics, request);
+  if (provider === "gemini") return completeWithGemini<T>(config, economics, request);
+  return completeWithAstra<T>(config, economics, request);
 }
 
 function findBalancedEnd(text: string, start: number): number {

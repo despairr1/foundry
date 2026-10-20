@@ -424,13 +424,18 @@ class EngineRunView(ctk.CTkScrollableFrame):
         if str(self.config_manager.get("FOUNDRY_OFFLINE_MODE", "false")).lower() == "true":
             return []
         get = lambda k: str(self.config_manager.get(k, "") or os.environ.get(k, "")).strip()
+        from project_chat import role_mapping
+        mapping = role_mapping(self.config_manager)
+        used = set(mapping.values())
         missing = []
-        if not get("ANTHROPIC_API_KEY"):
+        if "claude" in used and not get("ANTHROPIC_API_KEY"):
             missing.append("Anthropic (Claude)")
-        if not get("GEMINI_API_KEY"):
+        if "gemini" in used and not get("GEMINI_API_KEY"):
             missing.append("Google (Gemini)")
-        if not get("ASTRA_API_KEY") and not get("OPENAI_API_KEY") and not get("ANTHROPIC_API_KEY"):
-            missing.append("OpenAI")
+        if "openai" in used and not get("ASTRA_API_KEY") and not get("OPENAI_API_KEY"):
+            only_writer = mapping["architect"] != "openai" and mapping["auditor"] != "openai"
+            if not (only_writer and get("ANTHROPIC_API_KEY")):  # the code writer alone may fall back to Claude
+                missing.append("OpenAI")
         return missing
 
     def engine_entry(self):
