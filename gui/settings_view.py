@@ -36,7 +36,8 @@ PAGES = [
 ]
 
 CLAUDE_MODELS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5", "claude-sonnet-5"]
-GEMINI_MODELS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.5-flash"]
+GEMINI_MODELS = ["gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash", "gemini-3-flash-preview",
+                 "gemini-2.5-pro", "gemini-2.5-flash"]
 OPENAI_MODELS = ["gpt-5.5", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "o4-mini", "o3"]
 
 SHORTCUTS = [

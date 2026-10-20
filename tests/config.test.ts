@@ -35,6 +35,15 @@ describe("thinking level", () => {
   });
 });
 
+describe("Gemini 4 Argon", () => {
+  it("gets its own 32k output cap and a thinking level", async () => {
+    const { geminiThinkingConfig } = await import("../src/swarm/providers");
+    expect(defaultOutputTokens("gemini-4-argon", 16384)).toBe(32768);
+    expect(geminiThinkingConfig("gemini-4-argon", "high")).toEqual({ thinkingLevel: "high" });
+    expect(geminiThinkingConfig("gemini-4-argon", "max")).toEqual({ thinkingLevel: "high" });
+  });
+});
+
 describe("custom synthesizer pricing", () => {
   afterEach(() => {
     delete process.env.ASTRA_INPUT_PRICE_PER_M;

@@ -169,7 +169,9 @@ export function loadConfig(overrides: Partial<FoundryConfig> = {}): FoundryConfi
  * which every one of them accepts; others keep the schema default. Unused cap costs nothing.
  */
 export function defaultOutputTokens(model: string, fallback: number): number {
-  return /^(models\/)?(gemini-(2\.5|[3-9])|gpt-5|o[1-9])/i.test(model.trim()) ? 65536 : fallback;
+  const name = model.trim();
+  if (/argon/i.test(name)) return 32768; // Gemini 4 Argon's output limit
+  return /^(models\/)?(gemini-(2\.5|[3-9])|gpt-5|o[1-9])/i.test(name) ? 65536 : fallback;
 }
 
 /**
