@@ -353,6 +353,9 @@ class EngineRunView(ctk.CTkScrollableFrame):
         if abs(width - self._content_width) < 8:
             return
         self._content_width = width
+        for widget, inset in getattr(self, "_bubbles", []):
+            if widget.winfo_exists():
+                widget.set_max_width(max(240, width - inset))
         alive = []
         for label, inset in self._wrapped:
             if label.winfo_exists():
@@ -529,7 +532,11 @@ class EngineRunView(ctk.CTkScrollableFrame):
         except ValueError:
             return
         if event.get("type") == "spend":
+            if "inputTokens" in event:
+                self.run_state["tokens"] = (int(event.get("inputTokens") or 0), int(event.get("outputTokens") or 0))
             self.update_spend(float(event.get("spentUsd", 0) or 0))
+            if hasattr(self, "refresh_usage"):
+                self.refresh_usage()
         elif event.get("type") == "finished":
             self.run_state["finished"] = event
             if event.get("limitUsd"):

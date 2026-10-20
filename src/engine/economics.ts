@@ -135,6 +135,8 @@ export class EconomicsEngine {
   private maxBudgetUsd: number;
   private freezeStatePath: string;
   private totalSpentUsd = 0;
+  private totalInputTokens = 0;
+  private totalOutputTokens = 0;
   private ledger: TokenLedgerEntry[] = [];
   private activeContext: Record<string, unknown> = {};
   private moduleScope: ModuleBudgetScope | null = null;
@@ -227,12 +229,20 @@ export class EconomicsEngine {
 
     this.ledger.push(entry);
     this.totalSpentUsd += costUsd;
+    this.totalInputTokens += promptTokens;
+    this.totalOutputTokens += completionTokens;
 
     logger.updateState({
       spentUsd: this.totalSpentUsd,
       maxBudgetUsd: this.maxBudgetUsd
     });
-    emitProgress({ type: "spend", spentUsd: this.totalSpentUsd, limitUsd: this.maxBudgetUsd });
+    emitProgress({
+      type: "spend",
+      spentUsd: this.totalSpentUsd,
+      limitUsd: this.maxBudgetUsd,
+      inputTokens: this.totalInputTokens,
+      outputTokens: this.totalOutputTokens
+    });
 
     logger.info(
       "Economics",
@@ -255,6 +265,11 @@ export class EconomicsEngine {
     }
 
     return entry;
+  }
+
+  /** Tokens recorded so far (thinking counts as output). */
+  public getTokenTotals(): { inputTokens: number; outputTokens: number } {
+    return { inputTokens: this.totalInputTokens, outputTokens: this.totalOutputTokens };
   }
 
   public getTotalSpentUsd(): number {

@@ -509,6 +509,7 @@ export function createCliProgram(): Command {
         for (const agent of agents) {
           emitProgress({ type: "chat-thinking", agent });
           const before = economics.getTotalSpentUsd();
+          const tokensBefore = economics.getTokenTotals();
           let attempt = 1;
           const stream = {
             onAttempt: (n: number) => {
@@ -519,7 +520,16 @@ export function createCliProgram(): Command {
           try {
             const reply = await replyToChat(config, economics, agent, messages, context, stream, options.mode, skills);
             const spentUsd = economics.getTotalSpentUsd() - before;
-            emitProgress({ type: "chat-reply", agent, text: reply.text, model: reply.model, spentUsd });
+            const tokens = economics.getTokenTotals();
+            emitProgress({
+              type: "chat-reply",
+              agent,
+              text: reply.text,
+              model: reply.model,
+              spentUsd,
+              inputTokens: tokens.inputTokens - tokensBefore.inputTokens,
+              outputTokens: tokens.outputTokens - tokensBefore.outputTokens
+            });
             logger.info("CLI", `Chat reply from ${agent} (${reply.model}, ${reply.text.length} chars, $${spentUsd.toFixed(4)}).`);
             messages = [...messages, { role: "assistant", agent, text: reply.text }];
             replies++;

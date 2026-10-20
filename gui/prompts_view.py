@@ -112,6 +112,7 @@ class PromptsView(ProjectsView):
             self.subtitle_label.grid_remove()
 
     def _update_placeholder(self):
+        self._fit_composer()
         if self.task_box.get("1.0", "end").strip():
             self.placeholder.place_forget()
             return

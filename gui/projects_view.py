@@ -13,6 +13,7 @@ from project_chat import (AGENT_NAMES, AGENT_ROLES, AGENTS, ChatProcess, chat_pa
                           missing_chat_keys, now_iso, save_chat)
 from shell import Tooltip, icon_button, popup_menu
 from access_rules import blocked_message, is_blocked
+from selectable import SelectableText
 
 EXAMPLES = [
     ("To-do list app", "A command-line to-do list app: add, list, complete and delete tasks, saved to a JSON file."),
@@ -210,8 +211,14 @@ class ProjectsView(EngineRunView):
         self.task_box.bind("<Return>", self._on_enter)
         self.task_box.bind("<KeyPress>", self._on_key_press)
         self.task_box.bind("<KeyRelease>", lambda e: self._update_placeholder())
+        self.task_box.bind("<<Paste>>", lambda e: self.after_idle(self._update_placeholder), add="+")
         self.placeholder = ctk.CTkLabel(self.composer, text="", font=ctk.CTkFont(size=13), text_color=theme.TEXT_FAINT)
-        self.placeholder.bind("<Button-1>", lambda e: self.task_box.focus_set())
+        # A click anywhere in the rounded box (the placeholder, the padding, the empty bottom row) lands in the text.
+        for widget in (self.placeholder, self.composer):
+            widget.bind("<Button-1>", self._focus_composer, add="+")
+        for inner in (getattr(self.placeholder, "_label", None), getattr(self.placeholder, "_canvas", None)):
+            if inner is not None:
+                inner.configure(cursor="xterm")
 
         icon_button(self.composer, "+", "Add a file to your message", self._attach_file, size=30).grid(
             row=1, column=0, sticky="w", padx=(10, 0), pady=(2, 10))
@@ -234,6 +241,9 @@ class ProjectsView(EngineRunView):
         self.folder_button = self._flat_button(self.under, "", self._folder_menu)
         self.folder_button.grid(row=0, column=2, sticky="w", padx=(4, 0))
         self.folder_tip = Tooltip(self.folder_button, "")
+        self.usage_label = ctk.CTkLabel(self.under, text="", font=ctk.CTkFont(size=12), text_color=theme.TEXT_FAINT, height=24)
+        self.usage_label.grid(row=0, column=3, sticky="e", padx=(8, 8))
+        self.usage_tip = Tooltip(self.usage_label, "")
         self.limit_button = self._flat_button(self.under, "", self._limit_menu)
         self.limit_button.grid(row=0, column=4, sticky="e")
         Tooltip(self.limit_button, "Build spending limit: Foundry stops before it spends more than this")
@@ -444,6 +454,33 @@ class ProjectsView(EngineRunView):
         self._update_placeholder()
         self._render()
         self._scroll_to_end()
+        self.refresh_usage()
+
+    def _focus_composer(self, _event=None):
+        self.task_box.focus_set()
+        self.task_box.mark_set("insert", "end-1c")
+        self.task_box.see("insert")
+        return "break"
+
+    def _fit_composer(self):
+        """Grows the message box with its text, up to about 8 lines, then it scrolls (like Claude's composer)."""
+        inner = getattr(self.task_box, "_textbox", None)
+        if inner is None:
+            return
+        try:
+            lines = int((inner.count("1.0", "end-1c", "displaylines") or (0,))[0]) + 1
+        except Exception:
+            lines = 1
+        scaling = ctk.ScalingTracker.get_widget_scaling(self)
+        try:
+            import tkinter.font as tkfont
+            line_h = tkfont.Font(font=inner.cget("font")).metrics("linespace") / scaling
+        except Exception:
+            line_h = 20
+        height = int(max(54, min(8 * line_h + 14, lines * line_h + 14)))
+        if abs(height - getattr(self, "_composer_height", 54)) >= 2:
+            self._composer_height = height
+            self.task_box.configure(height=height)
 
     def _on_key_press(self, event):
         if event.char and event.char.isprintable():  # hide the placeholder before the first letter shows
@@ -451,6 +488,7 @@ class ProjectsView(EngineRunView):
 
     def _update_placeholder(self):
         """Shown while the box is empty, as in Claude's composer."""
+        self._fit_composer()
         if self.task_box.get("1.0", "end").strip():
             self.placeholder.place_forget()
             return
@@ -525,6 +563,45 @@ class ProjectsView(EngineRunView):
         self.after(40, scroll)
         self.after(250, scroll)  # wrapped labels settle their height one pass later
 
+    def _text(self, master, text, size=13, mono=False, color=None, bg=None, shrink=False, inset=60):
+        """Selectable message text (drag to select, Ctrl+C, right-click menu)."""
+        widget = SelectableText(master, text, size=size, mono=mono, color=color, bg=bg, shrink=shrink,
+                                max_width_px=max(240, self._content_width - inset) if shrink else None,
+                                on_copy_to_box=self.add_to_composer)
+        if shrink:
+            self._bubbles = [b for b in getattr(self, "_bubbles", []) if b[0].winfo_exists()] + [(widget, inset)]
+        return widget
+
+    # ------------------------------------------------------------ usage
+    @staticmethod
+    def _fmt_tokens(n):
+        n = int(n or 0)
+        return f"{n / 1_000_000:.1f}M" if n >= 1_000_000 else f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+    def refresh_usage(self):
+        """The counter under the message box: this chat's tokens and cost, live while a reply or a Build runs."""
+        if not hasattr(self, "usage_label") or not self.usage_label.winfo_exists():
+            return
+        replies = [m for m in self.messages if m.get("role") == "assistant"]
+        tok_in = sum(int(m.get("inputTokens", 0) or 0) for m in replies)
+        tok_out = sum(int(m.get("outputTokens", 0) or 0) for m in replies)
+        cost = sum(float(m.get("spentUsd", 0) or 0) for m in replies)
+        live = getattr(self, "_chat_usage", None)
+        writing = ""
+        if self.chat is not None and live is not None:
+            tok_in += live["in"]
+            tok_out += live["out"]
+            cost += live["usd"]
+            if live["stream_chars"]:
+                writing = f"  ·  writing ~{self._fmt_tokens(live['stream_chars'] // 4)}"
+        parts = [f"↑{self._fmt_tokens(tok_in)} ↓{self._fmt_tokens(tok_out)} tokens · ${cost:.3f}{writing}"] if (tok_in or tok_out or writing) else []
+        if self.running and self.run_state.get("tokens"):
+            b_in, b_out = self.run_state["tokens"]
+            parts.append(f"Build ↑{self._fmt_tokens(b_in)} ↓{self._fmt_tokens(b_out)} · ${self.run_state.get('spent', 0.0):.2f}")
+        self.usage_label.configure(text="   ".join(parts), text_color=theme.ACCENT if (self.chat is not None or self.running) else theme.TEXT_FAINT)
+        self.usage_tip.text = ("Tokens sent (↑, the conversation and instructions) and received (↓, including thinking) by the "
+                               "models in this chat, and what they cost. Counts up live while a reply is written or a Build runs.")
+
     def _copy_menu(self, widget, text):
         def copy():
             self.clipboard_clear()
@@ -539,10 +616,8 @@ class ProjectsView(EngineRunView):
         card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(card, text=f"›_  {AGENT_NAMES[agent]} wants to run this in the project folder", font=ctk.CTkFont(size=11),
                      text_color=theme.TEXT_FAINT, anchor="w").grid(row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 0))
-        label = self.wrap(ctk.CTkLabel(card, text=command, font=ctk.CTkFont(family=theme.MONO_FAMILY, size=12),
-                                       text_color=theme.TEXT, justify="left", anchor="w"), inset=110)
+        label = self._text(card, command, size=12, mono=True, bg=theme.CODE_BG)
         label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=12, pady=(4, 6))
-        self._copy_menu(label, command)
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 10))
         if state == "running":
@@ -690,8 +765,7 @@ class ProjectsView(EngineRunView):
     def _reply_frame(self, agent):
         """The live reply while it is being written: header plus one growing text label."""
         frame = self._reply_header(agent)
-        label = self.wrap(ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=13), text_color=theme.TEXT,
-                                       justify="left", anchor="w"), inset=60)
+        label = self._text(frame, "")
         label.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(4, 0))
         return frame, label
 
@@ -701,10 +775,8 @@ class ProjectsView(EngineRunView):
         card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(card, text="Prompt", font=ctk.CTkFont(size=11), text_color=theme.ACCENT, anchor="w").grid(
             row=0, column=0, sticky="w", padx=12, pady=(8, 0))
-        label = self.wrap(ctk.CTkLabel(card, text=body, font=ctk.CTkFont(family=theme.MONO_FAMILY, size=12), text_color=theme.TEXT,
-                                       justify="left", anchor="w"), inset=110)
+        label = self._text(card, body, size=12, mono=True, bg=theme.SURFACE)
         label.grid(row=1, column=0, sticky="ew", padx=12, pady=(4, 6))
-        self._copy_menu(label, body)
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
 
@@ -879,10 +951,8 @@ class ProjectsView(EngineRunView):
             outer.grid_columnconfigure(0, weight=1)
             bubble = ctk.CTkFrame(outer, corner_radius=12, fg_color=theme.SURFACE_HOVER)
             bubble.grid(row=0, column=1, sticky="e")
-            label = self.wrap(ctk.CTkLabel(bubble, text=text, font=ctk.CTkFont(size=13), text_color=theme.TEXT,
-                                           justify="left", anchor="w"), inset=220)
+            label = self._text(bubble, text, bg=theme.SURFACE_HOVER, shrink=True, inset=220)
             label.pack(padx=14, pady=9)
-            self._copy_menu(label, text)
             return outer
         if role == "notice":
             frame = ctk.CTkFrame(self.transcript, fg_color="transparent")
@@ -919,14 +989,11 @@ class ProjectsView(EngineRunView):
             if kind == "code":
                 block = ctk.CTkFrame(frame, corner_radius=8, fg_color=theme.CODE_BG, border_width=1, border_color=theme.BORDER)
                 block.grid(row=row, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-                label = self.wrap(ctk.CTkLabel(block, text=segment, font=ctk.CTkFont(family=theme.MONO_FAMILY, size=12),
-                                               text_color=theme.TEXT, justify="left", anchor="w"), inset=90)
+                label = self._text(block, segment, size=12, mono=True, bg=theme.CODE_BG)
                 label.pack(fill="x", padx=12, pady=8)
             else:
-                label = self.wrap(ctk.CTkLabel(frame, text=plain_text(segment), font=ctk.CTkFont(size=13), text_color=theme.TEXT,
-                                               justify="left", anchor="w"), inset=60)
+                label = self._text(frame, plain_text(segment))
                 label.grid(row=row, column=1, sticky="ew", padx=(6, 0), pady=(4, 0))
-            self._copy_menu(label, segment)
             row += 1
         meta = " · ".join(p for p in (str(m.get("model", "")), format_money(float(m.get("spentUsd", 0) or 0)) if "spentUsd" in m else "") if p)
         if meta:
@@ -985,6 +1052,7 @@ class ProjectsView(EngineRunView):
         finished = self.run_state.get("finished") or {}
         super()._on_engine_exit(return_code)
         self._sync_button()  # a chat reply may still be on its way
+        self.refresh_usage()
         if self._job is not None:
             self._after_job_build(finished.get("outcome") if finished else "stopped")
 
@@ -1046,6 +1114,7 @@ class ProjectsView(EngineRunView):
         cmd = self._chat_command(agent, folder)
         self.chat_folder = folder
         self._chat_answered = False
+        self._chat_usage = {"in": 0, "out": 0, "usd": 0.0, "stream_chars": 0, "base_in": 0, "base_out": 0, "base_usd": 0.0}
         self.chat = ChatProcess(self, cmd, self.workspace_root, dict(os.environ, FOUNDRY_DASHBOARD="false"),
                                 self._on_chat_event, self._on_chat_exit)
         self.chat.start()
@@ -1098,6 +1167,24 @@ class ProjectsView(EngineRunView):
 
     def _on_chat_event(self, event):
         kind = event.get("type")
+        live = getattr(self, "_chat_usage", None)
+        if live is not None:
+            if kind == "spend":  # cumulative for this chat process
+                live["in"] = int(event.get("inputTokens", 0) or 0) - live["base_in"]
+                live["out"] = int(event.get("outputTokens", 0) or 0) - live["base_out"]
+                live["usd"] = float(event.get("spentUsd", 0) or 0) - live["base_usd"]
+                live["stream_chars"] = 0
+            elif kind == "chat-delta":
+                live["stream_chars"] += len(str(event.get("text", "")))
+            elif kind == "chat-reply":
+                # this reply is now saved with its own counts: move the live baseline past it
+                live["base_in"] += int(event.get("inputTokens", 0) or 0)
+                live["base_out"] += int(event.get("outputTokens", 0) or 0)
+                live["base_usd"] += float(event.get("spentUsd", 0) or 0)
+                live["in"] = live["out"] = 0
+                live["usd"] = 0.0
+                live["stream_chars"] = 0
+        self.after_idle(self.refresh_usage)
         folder = self.chat_folder
         agent = event.get("agent") if event.get("agent") in AGENT_NAMES else "claude"
         if kind == "chat-thinking":
@@ -1109,6 +1196,8 @@ class ProjectsView(EngineRunView):
             self._end_stream()
             self._record(folder, {"role": "assistant", "agent": agent, "text": str(event.get("text", "")),
                                   "model": str(event.get("model", "")), "spentUsd": float(event.get("spentUsd", 0) or 0),
+                                  "inputTokens": int(event.get("inputTokens", 0) or 0),
+                                  "outputTokens": int(event.get("outputTokens", 0) or 0),
                                   "timestamp": now_iso()})
             if agent == "claude" and self.messages and self.messages[-1].get("role") == "assistant":
                 self._start_requested_build(self.messages[-1])
@@ -1127,6 +1216,7 @@ class ProjectsView(EngineRunView):
 
     def _on_chat_exit(self, code):
         self.chat = None
+        self.after_idle(self.refresh_usage)
         self._thinking = None
         self._end_stream()
         self.thinking_row.grid_remove()
@@ -1166,7 +1256,7 @@ class ProjectsView(EngineRunView):
         if live["widget"] is None:
             live["widget"], live["label"] = self._reply_frame(live["agent"])
             self.starter.grid_remove()
-        live["label"].configure(text=stream_preview(live["text"]))
+        live["label"].set_text(stream_preview(live["text"]))
         self._place_thinking(scroll=False)
         self._scroll_to_end(only_if_at_bottom=True)
 

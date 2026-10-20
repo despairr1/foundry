@@ -8,7 +8,7 @@ export type ProgressEvent =
   | { type: "phase"; phase: "planning" | "designing" | "testing" | "coding" | "checking"; module?: string; moduleIndex?: number; moduleCount?: number; attempt?: number }
   | { type: "plan"; modules: string[] }
   | { type: "module-done"; module: string; moduleIndex: number; moduleCount: number; success: boolean }
-  | { type: "spend"; spentUsd: number; limitUsd: number }
+  | { type: "spend"; spentUsd: number; limitUsd: number; inputTokens?: number; outputTokens?: number }
   | {
       type: "self-step";
       step: "health" | "evidence" | "continuing" | "scouting" | "chosen" | "improving" | "verifying" | "updating" | "reverting" | "saving";
@@ -20,7 +20,15 @@ export type ProgressEvent =
   | { type: "health"; typecheck: boolean; tests: boolean; detail?: string; problems?: string[] }
   | { type: "chat-thinking"; agent: "claude" | "gemini" | "openai" }
   | { type: "chat-delta"; agent: "claude" | "gemini" | "openai"; text: string; attempt: number }
-  | { type: "chat-reply"; agent: "claude" | "gemini" | "openai"; text: string; model: string; spentUsd: number }
+  | {
+      type: "chat-reply";
+      agent: "claude" | "gemini" | "openai";
+      text: string;
+      model: string;
+      spentUsd: number;
+      inputTokens?: number;
+      outputTokens?: number;
+    }
   | { type: "chat-error"; agent: "claude" | "gemini" | "openai"; problem: string }
   | {
       type: "finished";
