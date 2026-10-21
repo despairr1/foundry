@@ -62,6 +62,8 @@ interface StreamSpec {
   stopDetails?: Record<string, unknown> | null;
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   iterations?: unknown[];
   errorAfterStart?: string;
 }
@@ -89,7 +91,12 @@ function streamResponse(spec: StreamSpec): () => Response {
         stop_reason: null,
         stop_sequence: null,
         stop_details: null,
-        usage: { input_tokens: spec.inputTokens ?? 100, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+        usage: {
+          input_tokens: spec.inputTokens ?? 100,
+          output_tokens: 1,
+          cache_creation_input_tokens: spec.cacheWriteTokens ?? 0,
+          cache_read_input_tokens: spec.cacheReadTokens ?? 0
+        }
       }
     } as { type: string })
   ];
@@ -268,6 +275,33 @@ describe("Claude provider (SDK streaming)", () => {
     responses.push(streamResponse({ blocks: [{ type: "text", text: "expensive" }], outputTokens: 10_000 }));
     await expect(completeWithClaude(testConfig(), tight, { label: "t", prompt: "hi" })).rejects.toBeInstanceOf(BudgetExceededError);
     expect(requests).toHaveLength(1);
+  });
+
+  it("marks a long system prompt as a cached prefix and bills cache reads at a tenth of the input price", async () => {
+    const economics = new EconomicsEngine(100, freezeFile, false);
+    responses.push(streamResponse({ blocks: [{ type: "text", text: "ok" }], inputTokens: 200, outputTokens: 10, cacheReadTokens: 5000, cacheWriteTokens: 0 }));
+    const longSystem = "The contract, harness and tests. ".repeat(400); // well over the 1,024-token minimum
+
+    await completeWithClaude(testConfig(), economics, { label: "t", prompt: "hi", system: longSystem });
+
+    expect(requests[0].body.system).toEqual([{ type: "text", text: longSystem, cache_control: { type: "ephemeral" } }]);
+    const [entry] = economics.getLedger();
+    expect([entry.promptTokens, entry.cacheReadTokens, entry.cacheWriteTokens, entry.completionTokens]).toEqual([200, 5000, 0, 10]);
+    // claude-opus-4-8: $5/M in, $25/M out. 200 fresh + 5000 at 10% = 700 token-equivalents.
+    expect(entry.costUsd).toBeCloseTo((700 / 1_000_000) * 5 + (10 / 1_000_000) * 25, 10);
+    expect(economics.getTokenTotals()).toEqual({ inputTokens: 5200, outputTokens: 10, cachedTokens: 5000 });
+  });
+
+  it("sends a short system prompt as plain text, and every system prompt as text with caching off", async () => {
+    const economics = new EconomicsEngine(100, freezeFile, false);
+    responses.push(streamResponse({ blocks: [{ type: "text", text: "a" }] }), streamResponse({ blocks: [{ type: "text", text: "b" }] }));
+    const longSystem = "The contract, harness and tests. ".repeat(400);
+
+    await completeWithClaude(testConfig(), economics, { label: "t", prompt: "hi", system: "be brief" });
+    await completeWithClaude(testConfig({ promptCaching: false }), economics, { label: "t", prompt: "hi", system: longSystem });
+
+    expect(requests[0].body.system).toBe("be brief");
+    expect(requests[1].body.system).toBe(longSystem);
   });
 
   it("fails fast without an API key", async () => {

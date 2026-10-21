@@ -529,7 +529,8 @@ export function createCliProgram(): Command {
               model: reply.model,
               spentUsd,
               inputTokens: tokens.inputTokens - tokensBefore.inputTokens,
-              outputTokens: tokens.outputTokens - tokensBefore.outputTokens
+              outputTokens: tokens.outputTokens - tokensBefore.outputTokens,
+              cachedTokens: tokens.cachedTokens - tokensBefore.cachedTokens
             });
             logger.info("CLI", `Chat reply from ${agent} (${reply.model}, ${reply.text.length} chars, $${spentUsd.toFixed(4)}).`);
             messages = [...messages, { role: "assistant", agent, text: reply.text }];

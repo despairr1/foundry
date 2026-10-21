@@ -661,6 +661,12 @@ class SettingsView(ctk.CTkFrame):
                     default="8", kind="int")
         self._entry("MIN_MUTATION_KILL_RATIO", "Test strength (0 to 1)", "A part passes only when its tests catch at least this share of "
                     "deliberately broken copies of the code. 0.85 is strict; lower is faster.", default="0.85", kind="ratio")
+        self._switch("FOUNDRY_HOLDOUT_TESTS", "Hidden acceptance tests", "The auditor also writes a second test suite per part that the code "
+                     "writer never sees. A part passes only when both suites pass; on a failure the writer gets only the failing "
+                     "assertion. Costs one extra auditor call per part. Kept under .foundry/holdout in the project.", default="true")
+        self._entry("FOUNDRY_THRASH_LIMIT", "Stop a stalled attempt after", "How many identical results in a row (the same failure, or the "
+                    "same patch resent) end a branch's attempt. It is warned to change course one before. 0 never stops it.",
+                    default="3", kind="int")
         self._switch("AUTO_GIT_COMMIT", "Commit each finished part to git", "Every finished part becomes a git commit in the project (a repository "
                      "is created if there is none).", default="true")
         self._section("Where tests run")
@@ -673,6 +679,9 @@ class SettingsView(ctk.CTkFrame):
         self._entry("FOUNDRY_LSP_TIMEOUT_MS", "Code analysis timeout (ms)", "How long to wait for the language server's diagnostics on a change.",
                     default="1500", kind="int")
         self._section("Talking to the models")
+        self._switch("FOUNDRY_PROMPT_CACHING", "Cache the fixed part of prompts", "The contract, tests and instructions of a part (and a "
+                     "chat's instructions) are sent as a cached prefix, so repeat calls read them at about a tenth of the price on Claude. "
+                     "OpenAI and Gemini cache on their own; the token counter shows what came from the cache.", default="true")
         self._entry("REQUEST_TIMEOUT_MS", "Request timeout (ms)", "Thinking models can take minutes on a hard part.", default="600000", kind="int")
         self._entry("REQUEST_MAX_RETRIES", "Retries", "How many times a failed request is retried (0 to 10).", default="3", kind="int")
 

@@ -7,7 +7,8 @@ import shutil
 
 DEFAULT_ENABLED = ["clean-code", "test-first", "error-handling"]
 BUILTIN = {"clean-code", "test-first", "error-handling", "security-review", "cli-design", "python-style", "typescript-style",
-           "readme-and-docs", "performance", "data-files", "refactoring", "prompt-engineering", "git-hygiene"}
+           "readme-and-docs", "performance", "data-files", "refactoring", "prompt-engineering", "git-hygiene",
+           "rea", "gef", "tca"}
 MAX_SKILL_CHARS = 6000
 TEMPLATE = """---
 name: {name}

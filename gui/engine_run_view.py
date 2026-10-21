@@ -538,7 +538,8 @@ class EngineRunView(ctk.CTkScrollableFrame):
             return
         if event.get("type") == "spend":
             if "inputTokens" in event:
-                self.run_state["tokens"] = (int(event.get("inputTokens") or 0), int(event.get("outputTokens") or 0))
+                self.run_state["tokens"] = (int(event.get("inputTokens") or 0), int(event.get("outputTokens") or 0),
+                                            int(event.get("cachedTokens") or 0))
             self.update_spend(float(event.get("spentUsd", 0) or 0))
             if hasattr(self, "refresh_usage"):
                 self.refresh_usage()

@@ -11,6 +11,11 @@ export interface BranchEvaluationMetrics {
   sandboxPassed: boolean;
   mutationKillRatio: number;
   iteration: number;
+  /**
+   * GEF holdout gate: did the auditor's hidden acceptance suite pass? Absent or null when it was not run (no
+   * holdout for this module, or the public tests failed first). A branch cannot converge while it is false.
+   */
+  holdoutPassed?: boolean | null;
 }
 
 export interface ArchitecturalBranchNode {
@@ -81,7 +86,8 @@ export class TreeSearchEngine {
   public computeFitness(metrics: BranchEvaluationMetrics): number {
     const lspPenalty = metrics.lspErrorCount * 20;
     const latencyBonus = Math.max(0, 15 - metrics.lspDiagnosticLatencyMs / 50);
-    const sandboxScore = metrics.sandboxPassed ? 50 : 0;
+    // Passing the public tests but failing the hidden ones earns less than passing both, more than failing outright.
+    const sandboxScore = metrics.sandboxPassed ? (metrics.holdoutPassed === false ? 30 : 50) : 0;
     const mutationScore = metrics.mutationKillRatio * 35;
 
     return Math.max(0, sandboxScore + mutationScore + latencyBonus - lspPenalty);
@@ -108,21 +114,28 @@ export class TreeSearchEngine {
       node.failureHistory.push(failureSummary);
     }
 
-    if (metrics.sandboxPassed && metrics.lspErrorCount === 0 && metrics.mutationKillRatio >= this.minKillRatio) {
+    if (
+      metrics.sandboxPassed &&
+      metrics.lspErrorCount === 0 &&
+      metrics.mutationKillRatio >= this.minKillRatio &&
+      metrics.holdoutPassed !== false
+    ) {
       node.status = "CONVERGED";
     }
 
     // One fixed-shape line per step so the log (and the GUI's Search tree page, gui/engine_log.py) carries the
     // numbers the console dashboard shows:
-    //   Branch Alpha step 2: fitness 75.5, 0 LSP errors, mutation kill 80%, tests passed
+    //   Branch Alpha step 2: fitness 75.5, 0 LSP errors, mutation kill 80%, tests passed, hidden tests passed
     // Mutation testing only runs once the tests pass; before that the kill ratio is a placeholder, not a measurement.
+    // The hidden-tests part appears only when the holdout suite ran.
     const measured = metrics.sandboxPassed || metrics.mutationKillRatio > 0;
     const killText = measured ? `${Math.round(metrics.mutationKillRatio * 100)}%` : "not measured";
+    const holdoutText = typeof metrics.holdoutPassed === "boolean" ? `, hidden tests ${metrics.holdoutPassed ? "passed" : "failed"}` : "";
     logger.info(
       "TreeSearch",
       `Branch ${branchId} step ${metrics.iteration}: fitness ${node.fitnessScore.toFixed(1)}, ` +
         `${metrics.lspErrorCount} LSP error${metrics.lspErrorCount === 1 ? "" : "s"}, mutation kill ${killText}, ` +
-        `tests ${metrics.sandboxPassed ? "passed" : "failed"}`
+        `tests ${metrics.sandboxPassed ? "passed" : "failed"}${holdoutText}`
     );
 
     logger.updateBranch(branchId, {

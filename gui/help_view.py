@@ -428,6 +428,52 @@ The measurements themselves (lag, parse time, heap) live in the engine process d
 """
     },
     {
+        "id": "methods",
+        "icon": "📚",
+        "title": "Methods: REA, GEF and TCA in Foundry",
+        "subtitle": "What Foundry took from three papers on autonomous engineering, and where each piece runs",
+        "view_target": None,
+        "keywords": ["rea", "gef", "tca", "paper", "method", "holdout", "hidden tests", "counterexample", "thrash", "stalled",
+                     "cache", "caching", "prefix", "evidence", "recon", "reverse engineering", "greenfield", "arbiter", "token"],
+        "content": """
+## 📚 Methods: REA, GEF and TCA
+
+Three papers shaped how Foundry's agents plan, write and check code. This page says what was adopted, where it runs, and what was left out. Each paper is also a skill (**Settings › Skills**: `rea`, `gef`, `tca`) the models can follow in chats and Builds.
+
+---
+
+### GEF: Greenfield Engineering Framework
+*Contracts first, tests written apart from the code, acceptance on hidden workloads, only the shrunken counterexample fed back.*
+
+- **Hidden acceptance tests.** For every part, the auditor writes two suites before any code exists: the visible boundary suite the code writer implements against, and a hidden acceptance suite from the planned contract that the writer never sees (it is never in the writer's workspace). A part is accepted only when both pass. When the hidden suite fails, the writer gets the failing assertions only, and is told to re-read the contract rather than guess the test. **Settings › Builds › Hidden acceptance tests** turns it off; the suite is kept under `.foundry/holdout/` in the project for you to read. The Search tree page shows "hidden tests passed/failed" per step.
+- **Counterexample shrinking.** Sandbox output is folded before it goes back to a model: the assertion and error lines, the diff of expected and actual, the first frame in the project's own code; no repeats, no color codes, no framework frames.
+- **The gates, in order:** no diagnostics → visible tests → earlier parts' tests → hidden tests → mutation kill ratio. These already existed except the hidden gate; they are unchanged.
+- **Not adopted:** deployment rings, canaries and rollback policies. Foundry builds and tests; it does not run your production.
+
+### REA: Reverse Engineering Agents
+*Evidence before hypothesis; current behavior is the specification; differential parity.*
+
+- **Recon before planning.** When the folder already has code, the architect gets an evidence summary first: what the manifests declare (name, scripts, dependencies), which tests exist, and what each source file exports. The call graph and the file list were already there; the evidence puts them in order of what matters.
+- **Code as the spec.** The architect is told that, unless the task says otherwise, every existing public symbol and passing test is a requirement, to prefer the smallest change, and to state its assumptions in the contract's invariants where the auditor turns them into tests.
+- **Signature stubs.** A dependency too large to quote is handed to the models as its exported declarations rather than a cut-off listing.
+- **Not adopted:** decompilation and binary analysis tooling. Foundry works from source.
+
+### TCA: Token and Context Arbiter
+*Send only what the task needs; keep the stable part of a prompt cached; budget each attempt; stop thrashing.*
+
+- **Stable prefix, cached.** Every prompt is now laid out with the part that stays the same across calls first (role, contract, harness, tests, dependencies, instructions) and the part that changes last (current source, the last failure, memory). On Claude the prefix is marked as a cached block, so repeat calls in the same part, and every reply in a chat, read it at about a tenth of the input price; OpenAI and Gemini cache prefixes on their own. **Settings › Builds › Cache the fixed part of prompts** turns the marker off. Cached tokens are priced at their discount in the spending limit, and the token counter under the chat box shows them as ⟲.
+- **Thrash detection.** Each branch's failures are fingerprinted (ignoring line numbers, paths and timings), as is each patch set. The same result twice in a row gets the writer a warning to change its approach; three times (**Settings › Builds › Stop a stalled attempt after**) ends that branch so the others, or the next plan, take over.
+- **Log folding** (shared with GEF's shrinking) and **signature stubs** (shared with REA) keep each call small.
+- **Folded conversations.** In chats and the prompt studio, messages that no longer fit the window are folded to one line each instead of dropped, so the thread survives a long conversation.
+- **Not adopted:** a separate routing model that picks a cheaper model per step. Roles are yours to assign in **Settings › AI models**.
+
+### Where to see it working
+- **Search tree** (Engine internals): each step's line now ends with the hidden-tests result; a stalled branch shows "Pruned: stalled: …".
+- **Context pane**: a Prompt caching row, and the token counter's ⟲ cached count.
+- **Diagnostics**: the warning when the auditor and the code writer are the same model (one model checking its own work is weaker than two).
+"""
+    },
+    {
         "id": "settings",
         "icon": "⚙️",
         "title": "Settings",
@@ -446,7 +492,7 @@ Settings (bottom of the sidebar) is laid out like the Claude app: pages on the l
 - **AI models**: the default Thinking level; the model and longest reply for the architect (Claude), the auditor (Gemini) and the code writer (the synthesizer). The code writer can be OpenAI or any provider you added.
 - **API keys & providers**: the three built-in keys, each with **Save & Test** (which also fetches that provider's model list for the AI models page). **+ Add a provider** adds any OpenAI-compatible service or local server: DeepSeek, OpenRouter, Groq, Mistral, xAI, Together, Fireworks, Ollama, LM Studio, or your own endpoint. Give it a name, its endpoint, a model and a key (local servers need none), test it, and pick it as the code writer. Its per-million-token prices, if you enter them, feed the spending limit.
 - **Spending limits**: the default Build limit, the Improve limit, the chat reply limit, and an optional per-part cap.
-- **Builds**: attempts per part, test strength (mutation kill ratio), git commits, where tests run (this computer or the Docker sandbox), timeouts and retries.
+- **Builds**: attempts per part, test strength (mutation kill ratio), hidden acceptance tests, when a stalled attempt stops, git commits, where tests run (this computer or the Docker sandbox), prompt caching, timeouts and retries (see **Methods** for the first three).
 - **Improve**: rounds per session, **Check now** (a free health check), and Ouroboros, Foundry's self-healing while it runs.
 - **AI access**: the folders you blocked or allowed (also set by right-clicking a folder in the Files pane).
 - **Terminal**: the shell new tabs run, font and size.

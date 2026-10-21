@@ -42,6 +42,14 @@ python gui/main.py
 ### Skills
 `skills/<name>/SKILL.md` files hold instructions the models follow when they apply (clean code, test first, error handling, security review, a language's style, prompt writing...). Enable them, add your own or write new ones under **Settings › Skills**.
 
+### Methods
+Three papers shaped how the agents work, and each is also a skill (`rea`, `gef`, `tca`):
+- **GEF** (Greenfield Engineering Framework): the auditor writes a hidden acceptance suite per part that the code writer never sees, and a part is accepted only when both suites pass. Failures go back as a shrunken counterexample, not a log.
+- **REA** (Reverse Engineering Agents): on an existing codebase the architect first gets the evidence (manifests, tests, exported symbols) and treats current behavior as the specification.
+- **TCA** (Token and Context Arbiter): prompts keep a stable, cached prefix (about a tenth of the input price on Claude for repeat calls), logs are folded, large dependencies become signature stubs, long chats fold their oldest messages, and a branch that keeps producing the same failure is stopped.
+
+Help › **Methods: REA, GEF and TCA in Foundry** says exactly what was adopted and what was not; Settings › Builds holds the switches.
+
 ### Command line
 The engine works without the app:
 

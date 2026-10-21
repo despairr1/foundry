@@ -41,6 +41,12 @@ export const ConfigSchema = z.object({
   maxModuleBudgetUsd: z.number().positive().optional(),
   maxConvergenceIterations: z.number().int().positive().default(8),
   minMutationKillRatio: z.number().min(0).max(1).default(0.85),
+  /** GEF: the auditor also writes a hidden acceptance suite per module that the code writer never sees. */
+  holdoutTests: z.boolean().default(true),
+  /** TCA: identical results in a row before a branch's attempt is abandoned (0 = never). */
+  thrashLimit: z.number().int().min(0).max(20).default(3),
+  /** TCA: cache the stable prefix of every prompt on providers that support it (Claude: explicit cache_control). */
+  promptCaching: z.boolean().default(true),
 
   sqliteDbPath: z.string().default(path.resolve(process.cwd(), ".foundry-memory.sqlite")),
   freezeStatePath: z.string().default(path.resolve(process.cwd(), ".foundry-freeze.json")),
@@ -142,6 +148,9 @@ export function loadConfig(overrides: Partial<FoundryConfig> = {}): FoundryConfi
     maxModuleBudgetUsd: envFloat("MAX_MODULE_BUDGET_USD"),
     maxConvergenceIterations: envInt("MAX_CONVERGENCE_ITERATIONS"),
     minMutationKillRatio: envFloat("MIN_MUTATION_KILL_RATIO"),
+    holdoutTests: envBool("FOUNDRY_HOLDOUT_TESTS"),
+    thrashLimit: envInt("FOUNDRY_THRASH_LIMIT"),
+    promptCaching: envBool("FOUNDRY_PROMPT_CACHING"),
 
     sqliteDbPath: env("FOUNDRY_SQLITE_PATH"),
     freezeStatePath: env("FOUNDRY_FREEZE_PATH"),

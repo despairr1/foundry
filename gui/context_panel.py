@@ -153,7 +153,9 @@ class ContextPanel(ctk.CTkScrollableFrame):
 
         agent = next((label for name, label in AGENTS if name == getattr(view, "agent", "claude")), "Claude")
         get = self.config_manager.get
+        caching = str(get("FOUNDRY_PROMPT_CACHING", "true") or "true").strip().lower() in ("true", "1", "yes")
         settings = [("Who answers", agent), ("Thinking", thinking_label(view.thinking_level())),
+                    ("Prompt caching", "on · the instructions are a cached prefix" if caching else "off (Settings › Builds)"),
                     ("Chat reply limit", format_money(float(get("FOUNDRY_CHAT_BUDGET_USD", "1") or 1))),
                     ("Chat cost so far", format_money(chat_spend(messages)))]
         if mode == "project":

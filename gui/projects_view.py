@@ -589,22 +589,27 @@ class ProjectsView(EngineRunView):
         replies = [m for m in self.messages if m.get("role") == "assistant"]
         tok_in = sum(int(m.get("inputTokens", 0) or 0) for m in replies)
         tok_out = sum(int(m.get("outputTokens", 0) or 0) for m in replies)
+        tok_cached = sum(int(m.get("cachedTokens", 0) or 0) for m in replies)
         cost = sum(float(m.get("spentUsd", 0) or 0) for m in replies)
         live = getattr(self, "_chat_usage", None)
         writing = ""
         if self.chat is not None and live is not None:
             tok_in += live["in"]
             tok_out += live["out"]
+            tok_cached += live.get("cached", 0)
             cost += live["usd"]
             if live["stream_chars"]:
                 writing = f"  ·  writing ~{self._fmt_tokens(live['stream_chars'] // 4)}"
-        parts = [f"↑{self._fmt_tokens(tok_in)} ↓{self._fmt_tokens(tok_out)} tokens · ${cost:.3f}{writing}"] if (tok_in or tok_out or writing) else []
+        cached = f" (⟲{self._fmt_tokens(tok_cached)} cached)" if tok_cached else ""
+        parts = [f"↑{self._fmt_tokens(tok_in)}{cached} ↓{self._fmt_tokens(tok_out)} tokens · ${cost:.3f}{writing}"] if (tok_in or tok_out or writing) else []
         if self.running and self.run_state.get("tokens"):
-            b_in, b_out = self.run_state["tokens"]
-            parts.append(f"Build ↑{self._fmt_tokens(b_in)} ↓{self._fmt_tokens(b_out)} · ${self.run_state.get('spent', 0.0):.2f}")
+            b_in, b_out, b_cached = (tuple(self.run_state["tokens"]) + (0,))[:3]
+            b_text = f" (⟲{self._fmt_tokens(b_cached)} cached)" if b_cached else ""
+            parts.append(f"Build ↑{self._fmt_tokens(b_in)}{b_text} ↓{self._fmt_tokens(b_out)} · ${self.run_state.get('spent', 0.0):.2f}")
         self.usage_label.configure(text="   ".join(parts), text_color=theme.ACCENT if (self.chat is not None or self.running) else theme.TEXT_FAINT)
         self.usage_tip.text = ("Tokens sent (↑, the conversation and instructions) and received (↓, including thinking) by the "
-                               "models in this chat, and what they cost. Counts up live while a reply is written or a Build runs.")
+                               "models in this chat, and what they cost. ⟲ is the part of the sent tokens the provider served from its "
+                               "prompt cache, at a fraction of the price. Counts up live while a reply is written or a Build runs.")
 
     def _copy_menu(self, widget, text):
         def copy():
@@ -1180,6 +1185,7 @@ class ProjectsView(EngineRunView):
             if kind == "spend":  # cumulative for this chat process
                 live["in"] = int(event.get("inputTokens", 0) or 0) - live["base_in"]
                 live["out"] = int(event.get("outputTokens", 0) or 0) - live["base_out"]
+                live["cached"] = int(event.get("cachedTokens", 0) or 0) - live.get("base_cached", 0)
                 live["usd"] = float(event.get("spentUsd", 0) or 0) - live["base_usd"]
                 live["stream_chars"] = 0
             elif kind == "chat-delta":
@@ -1188,8 +1194,9 @@ class ProjectsView(EngineRunView):
                 # this reply is now saved with its own counts: move the live baseline past it
                 live["base_in"] += int(event.get("inputTokens", 0) or 0)
                 live["base_out"] += int(event.get("outputTokens", 0) or 0)
+                live["base_cached"] = live.get("base_cached", 0) + int(event.get("cachedTokens", 0) or 0)
                 live["base_usd"] += float(event.get("spentUsd", 0) or 0)
-                live["in"] = live["out"] = 0
+                live["in"] = live["out"] = live["cached"] = 0
                 live["usd"] = 0.0
                 live["stream_chars"] = 0
         self.after_idle(self.refresh_usage)
@@ -1206,6 +1213,7 @@ class ProjectsView(EngineRunView):
                                   "model": str(event.get("model", "")), "spentUsd": float(event.get("spentUsd", 0) or 0),
                                   "inputTokens": int(event.get("inputTokens", 0) or 0),
                                   "outputTokens": int(event.get("outputTokens", 0) or 0),
+                                  "cachedTokens": int(event.get("cachedTokens", 0) or 0),
                                   "timestamp": now_iso()})
             if agent == "claude" and self.messages and self.messages[-1].get("role") == "assistant":
                 self._start_requested_build(self.messages[-1])

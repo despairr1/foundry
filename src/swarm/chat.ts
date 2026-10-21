@@ -1,6 +1,7 @@
 import { FoundryConfig, ModelRoleProvider } from "../config";
 import { EconomicsEngine } from "../engine/economics";
 import { completeWithAstra, completeWithClaude, completeWithGemini, CompletionRequest } from "./providers";
+import { foldMessages } from "../engine/methods";
 
 /**
  * The project chat: the user talks with the three models about what Foundry should build or change,
@@ -234,6 +235,10 @@ export function chatSystemPrompt(
   return `${SHARED_SYSTEM}\n\n${own}${build}\n\n${commandInstructions(platform)}`;
 }
 
+/**
+ * The conversation, newest messages in full. Once the window is full, the messages that no longer fit are folded to
+ * one line each (TCA's compaction) rather than dropped, so the model keeps the thread of a long conversation.
+ */
 export function formatTranscript(messages: ChatMessage[], maxChars = MAX_TRANSCRIPT_CHARS): string {
   const lines = messages.map((m) => `${m.role === "user" ? "User" : AGENT_LABELS[m.agent ?? "claude"]}: ${m.text.trim()}`);
   const kept: string[] = [];
@@ -243,7 +248,9 @@ export function formatTranscript(messages: ChatMessage[], maxChars = MAX_TRANSCR
     if (total > maxChars && kept.length > 0) break;
     kept.unshift(lines[i].length > maxChars ? `${lines[i].slice(0, maxChars)} [cut]` : lines[i]);
   }
-  return `${kept.length < lines.length ? "[Earlier messages left out]\n\n" : ""}${kept.join("\n\n")}`;
+  const folded = lines.slice(0, lines.length - kept.length);
+  const prefix = folded.length > 0 ? `[Earlier messages left out] Folded, one line each:\n${foldMessages(folded)}\n\n` : "";
+  return `${prefix}${kept.join("\n\n")}`;
 }
 
 export function composeChatPrompt(agent: ChatAgent, messages: ChatMessage[], projectContext = ""): string {

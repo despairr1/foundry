@@ -33,7 +33,7 @@ _PRUNED_FITNESS = re.compile(r"^Pruned Branch (Alpha|Beta|Gamma) \(fitness ([\d.
 # "Branch Alpha step 2: fitness 75.5, 0 LSP errors, mutation kill 80%, tests passed" (TreeSearchEngine.recordBranchStep);
 # "mutation kill not measured" when the tests failed, since mutation testing only runs on passing tests.
 _STEP = re.compile(r"^Branch (Alpha|Beta|Gamma) step (\d+): fitness ([\d.]+), (\d+) LSP errors?, "
-                   r"mutation kill (?:(\d+)%|not measured), tests (passed|failed)$")
+                   r"mutation kill (?:(\d+)%|not measured), tests (passed|failed)(?:, hidden tests (passed|failed))?$")
 _LETHALITY = re.compile(r"^Branch (Alpha|Beta|Gamma) tests failed mutation lethality \((\d+)%\)")
 _HARDENING = re.compile(r"^Test hardening failed on Branch (Alpha|Beta|Gamma): (.*)$")
 _ARCHITECT_FAILED = re.compile(r"^Architect failed for Branch (Alpha|Beta|Gamma) on \S+: (.*)$")
@@ -204,7 +204,8 @@ class _RunBuilder:
                 branch = self._current_module()["branches"][m.group(1)]
                 branch["steps"] += 1
                 branch.update(step=int(m.group(2)), fitness=float(m.group(3)), lsp_errors=int(m.group(4)),
-                              kill_ratio=int(m.group(5)) if m.group(5) is not None else None, tests_passed=m.group(6) == "passed")
+                              kill_ratio=int(m.group(5)) if m.group(5) is not None else None, tests_passed=m.group(6) == "passed",
+                              hidden_passed=(m.group(7) == "passed") if m.group(7) else None)
                 if branch["status"] == "none":
                     branch["status"] = "active"
                 return

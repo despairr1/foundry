@@ -78,13 +78,14 @@ export class AstraSynthesizer {
       return this.buildDeterministicSemanticPatch(params);
     }
 
-    const prompt = [
+    // Stable prefix first (TCA): everything that stays the same from one attempt of this branch to the next goes in
+    // the system prompt, where the provider can cache it; what changes per attempt goes in the user prompt.
+    const system = [
       `You are Astra, the Code Synthesizer for Branch ${params.branchId} of an autonomous software engineering engine.`,
-      `Implement the contract so that the auditor's test suite passes.`,
+      `Implement the contract so that the auditor's test suite passes. The auditor also keeps a hidden acceptance suite for this contract that you never see, so implement the contract itself, not just the visible tests.`,
       `Contract:\n${JSON.stringify(params.contract, null, 2)}`,
       `Test harness:\n${describeTestHarness(params.contract.language, params.contract.targetFilePath, params.contract.testFilePath)}`,
       `Test suite (${params.testSuite.testFilePath}):\n${params.testSuite.testCode}`,
-      `Workspace files:\n${params.workspaceFilePaths.join("\n") || "(none)"}`,
       ...(params.dependencies.length > 0
         ? [
             `Earlier modules this one builds on (already implemented and verified; import them instead of re-implementing them, and keep their public API and tests passing):\n${describeModuleDependencies(
@@ -92,13 +93,17 @@ export class AstraSynthesizer {
             )}`
           ]
         : []),
+      PATCH_PROTOCOL
+    ].join("\n\n");
+    const prompt = [
+      `Workspace files:\n${params.workspaceFilePaths.join("\n") || "(none)"}`,
       `Current source of ${params.contract.targetFilePath}:\n${params.currentSource || "(file does not exist yet)"}`,
       `Feedback from the previous attempt (diagnostics, sandbox output, rejected patches):\n${params.feedbackText}`,
       `Episodic memory (fixes that worked in past runs):\n${params.episodicMemoryContext}`,
-      PATCH_PROTOCOL
+      `Respond now with the patches, in the JSON form given in your instructions.`
     ].join("\n\n");
 
-    const request = { prompt, parse: parseSemanticPatches };
+    const request = { system, prompt, parse: parseSemanticPatches };
 
     // The code writer is a setting: OpenAI (or a custom provider through ASTRA_*), Gemini, or Claude.
     // OpenAI and Gemini fall back to Claude when they fail and a Claude key exists.

@@ -5,6 +5,7 @@ import { SupportedLanguage } from "../ast/parser";
 import { normalizeWorkspacePath } from "../utils/paths";
 import { BRANCH_STRATEGIES, describeTestHarness } from "./harness";
 import { completeWithProvider, extractJson, extractJsonArray } from "./providers";
+import { EVIDENCE_GUIDANCE, signatureStub } from "../engine/methods";
 
 export interface StateSchema {
   name: string;
@@ -41,12 +42,15 @@ export interface ModuleDependency {
 
 const MAX_DEPENDENCY_SOURCE_CHARS = 12000;
 
-/** Renders dependencies for the auditor and synthesizer prompts. */
+/**
+ * Renders dependencies for the auditor and synthesizer prompts. A source too large to quote becomes a signature
+ * stub (TCA's lazy handle): the models get its public shape, not a cut-off listing.
+ */
 export function describeModuleDependencies(dependencies: ModuleDependency[]): string {
   return dependencies
     .map(({ contract, source }) => {
       const api = contract.contracts.map((c) => c.signature || c.symbolName).join("; ");
-      const body = source.length > MAX_DEPENDENCY_SOURCE_CHARS ? `${source.slice(0, MAX_DEPENDENCY_SOURCE_CHARS)}\n... (truncated)` : source;
+      const body = source.length > MAX_DEPENDENCY_SOURCE_CHARS ? signatureStub(source, contract.language) : source;
       return `- ${contract.moduleName} (${contract.targetFilePath}) exports: ${api}\n  Current source of ${contract.targetFilePath}:\n${body || "(empty)"}`;
     })
     .join("\n\n");
@@ -217,6 +221,31 @@ export class ClaudeArchitect {
     this.economics = economics;
   }
 
+  /**
+   * The part of every architect prompt that is the same for the plan and for each branch design of a run: the
+   * specification, the evidence about existing code, the workspace, the call graph and memory. It goes in the
+   * system prompt so the provider can cache it across those calls (TCA's stable prefix).
+   */
+  private sharedContext(params: {
+    specification: string;
+    language: SupportedLanguage;
+    callGraphSummary: string;
+    episodicMemoryContext: string;
+    existingFiles: Map<string, string>;
+    evidence?: string;
+  }): string {
+    const fileList = Array.from(params.existingFiles.keys()).slice(0, 200);
+    return [
+      `You are the Lead Architect of an autonomous software engineering engine.`,
+      `Target language: ${params.language}`,
+      `Specification:\n${params.specification}`,
+      ...(params.evidence?.trim() ? [`Evidence gathered from the existing code (REA recon):\n${params.evidence.trim()}`, EVIDENCE_GUIDANCE] : []),
+      `Existing workspace files:\n${fileList.length > 0 ? fileList.join("\n") : "(empty workspace)"}`,
+      `Call graph context:\n${params.callGraphSummary}`,
+      `Episodic memory (fixes that worked in past runs):\n${params.episodicMemoryContext}`
+    ].join("\n\n");
+  }
+
   /** Decomposes the specification into an ordered plan of modules, each of which may import the ones before it. */
   public async planModules(params: {
     specification: string;
@@ -224,19 +253,14 @@ export class ClaudeArchitect {
     callGraphSummary: string;
     episodicMemoryContext: string;
     existingFiles: Map<string, string>;
+    /** REA: what the existing code declares and tests (describeEvidence); empty for a new project. */
+    evidence?: string;
   }): Promise<ModuleArchitectureContract[]> {
     if (this.config.offlineMode) {
       return validateModulePlan(this.synthesizeDeterministicPlan(params), params.language);
     }
 
-    const fileList = Array.from(params.existingFiles.keys()).slice(0, 200);
     const prompt = [
-      `You are the Lead Architect of an autonomous software engineering engine.`,
-      `Target language: ${params.language}`,
-      `Specification:\n${params.specification}`,
-      `Existing workspace files:\n${fileList.length > 0 ? fileList.join("\n") : "(empty workspace)"}`,
-      `Call graph context:\n${params.callGraphSummary}`,
-      `Episodic memory (fixes that worked in past runs):\n${params.episodicMemoryContext}`,
       `Test harness each module's tests will run under:\n${describeTestHarness(params.language, "<targetFilePath>", "<testFilePath>")}`,
       [
         `Decompose the specification into an ordered plan of modules. Each module is one implementation file with its own test file; modules are implemented, tested and committed one at a time, in plan order.`,
@@ -249,6 +273,7 @@ export class ClaudeArchitect {
 
     return completeWithProvider<ModuleArchitectureContract[]>(this.config.architectProvider, this.config, this.economics, {
       label: "ClaudeArchitect[plan]",
+      system: this.sharedContext(params),
       prompt,
       parse: (text) => parseArchitectureContracts(text, params.language)
     });
@@ -264,23 +289,19 @@ export class ClaudeArchitect {
     callGraphSummary: string;
     episodicMemoryContext: string;
     existingFiles: Map<string, string>;
+    evidence?: string;
   }): Promise<ModuleArchitectureContract> {
     const planned = params.plan[params.moduleIndex];
     if (this.config.offlineMode) {
       return { ...planned, branchStrategy: `Branch_${params.branchId}_StrictInvariants` };
     }
 
-    const fileList = Array.from(params.existingFiles.keys()).slice(0, 200);
+    // Branch-specific lines come after the shared context so the three branch calls share one cached prefix.
     const prompt = [
-      `You are the Lead Architect for Branch ${params.branchId} of an autonomous software engineering engine.`,
+      `You are now designing for Branch ${params.branchId}.`,
       `Branch strategy: ${BRANCH_STRATEGIES[params.branchId] ?? "Choose a distinct, well-justified design."}`,
-      `Target language: ${params.language}`,
-      `Specification:\n${params.specification}`,
       `Module plan (built in order; each module may import the ones before it):\n${describeModulePlan(params.plan, params.moduleIndex)}`,
       `Planned contract of the module to design:\n${JSON.stringify(planned, null, 2)}`,
-      `Existing workspace files:\n${fileList.length > 0 ? fileList.join("\n") : "(empty workspace)"}`,
-      `Call graph context:\n${params.callGraphSummary}`,
-      `Episodic memory (fixes that worked in past runs):\n${params.episodicMemoryContext}`,
       `Test harness the generated tests will run under:\n${describeTestHarness(params.language, planned.targetFilePath, planned.testFilePath)}`,
       [
         `Refine this module's contract according to your branch strategy. Keep every planned symbolName so later modules can rely on it; you may tighten signatures and invariants and add helper symbols.`,
@@ -292,6 +313,7 @@ export class ClaudeArchitect {
 
     return completeWithProvider<ModuleArchitectureContract>(this.config.architectProvider, this.config, this.economics, {
       label: `ClaudeArchitect[${params.branchId}:${planned.moduleName}]`,
+      system: this.sharedContext(params),
       prompt,
       parse: (text) => parseBranchModuleDesign(text, planned)
     });

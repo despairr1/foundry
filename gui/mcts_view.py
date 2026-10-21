@@ -34,6 +34,8 @@ def step_facts(branch):
     if branch["kill_ratio"] is not None:
         facts.append(f"{branch['kill_ratio']}% mutants killed")
     facts.append("tests passed" if branch["tests_passed"] else "tests failed")
+    if branch.get("hidden_passed") is not None:  # the auditor's hidden acceptance suite (GEF), once the visible tests pass
+        facts.append("hidden tests passed" if branch["hidden_passed"] else "hidden tests failed")
     return facts
 
 

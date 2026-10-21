@@ -167,17 +167,40 @@ function isRetryableClaudeError(err: unknown): boolean {
 /**
  * With server-side fallbacks, top-level usage covers only the attempt that produced
  * the message; `usage.iterations` lists every billed attempt and the model that ran it.
+ * Claude reports cached input tokens apart from input_tokens, so they go straight to the ledger's cache columns.
  */
 function recordClaudeUsage(economics: EconomicsEngine, requestedModel: string, message: Anthropic.Beta.BetaMessage): void {
+  const cacheOf = (usage: { cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }) => ({
+    readTokens: usage.cache_read_input_tokens ?? 0,
+    writeTokens: usage.cache_creation_input_tokens ?? 0
+  });
   const iterations = message.usage.iterations ?? [];
   if (iterations.length === 0) {
-    economics.recordUsage("claude", message.model || requestedModel, message.usage.input_tokens, message.usage.output_tokens);
+    economics.recordUsage("claude", message.model || requestedModel, message.usage.input_tokens, message.usage.output_tokens, cacheOf(message.usage));
     return;
   }
   for (const iteration of iterations) {
     const model = "model" in iteration && iteration.model ? iteration.model : requestedModel;
-    economics.recordUsage("claude", model, iteration.input_tokens, iteration.output_tokens);
+    economics.recordUsage("claude", model, iteration.input_tokens, iteration.output_tokens, cacheOf(iteration));
   }
+}
+
+/** Claude caches a prompt prefix only from about 1,024 tokens on (more on some models); below that the marker is ignored. */
+const CLAUDE_CACHE_MIN_TOKENS = 1024;
+
+/**
+ * The system prompt is the stable prefix of every Foundry prompt (TCA's KV-prefix pinning): the contract, harness,
+ * tests and dependencies for a module, or the instructions for a chat. With caching on it is sent as one text
+ * block with a cache breakpoint, so every later call in the same module (or chat) reads it at a tenth of the price.
+ */
+export function claudeSystemParam(
+  system: string | undefined,
+  promptCaching: boolean,
+  estimateTokens: (text: string) => number
+): string | Array<{ type: "text"; text: string; cache_control: { type: "ephemeral" } }> | undefined {
+  if (!system) return undefined;
+  if (!promptCaching || estimateTokens(system) < CLAUDE_CACHE_MIN_TOKENS) return system;
+  return [{ type: "text", text: system, cache_control: { type: "ephemeral" } }];
 }
 
 export async function completeWithClaude<T = string>(
@@ -207,11 +230,12 @@ export async function completeWithClaude<T = string>(
       // Thinking models can run for minutes, so stream and let the SDK assemble the
       // final message. Sampling parameters (temperature/top_p) are rejected by current
       // Claude models, so branch diversity comes from the prompt rather than temperature.
+      const system = claudeSystemParam(request.system, config.promptCaching, (text) => economics.estimateTokens(text));
       const stream = client.beta.messages.stream({
         model,
         max_tokens: config.anthropicMaxTokens,
         messages: [{ role: "user", content: request.prompt }],
-        ...(request.system ? { system: request.system } : {}),
+        ...(system ? { system } : {}),
         // Thinking is always on for current Claude models; effort sets how deep it goes.
         ...(config.thinkingLevel ? { output_config: { effort: config.thinkingLevel } } : {}),
         ...(useFallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {})
@@ -273,7 +297,7 @@ export async function completeWithGemini<T = string>(
           finishReason?: string;
         }>;
         promptFeedback?: { blockReason?: string };
-        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number };
+        usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; cachedContentTokenCount?: number };
       }>(
         request.label,
         `${config.geminiBaseUrl}/models/${model}:generateContent`,
@@ -287,15 +311,17 @@ export async function completeWithGemini<T = string>(
         .filter((part) => !part.thought && typeof part.text === "string")
         .map((part) => part.text)
         .join("");
-      // Thinking tokens are billed as output tokens.
+      // Thinking tokens are billed as output tokens; Gemini's implicit cache hits are part of promptTokenCount.
       const outTokens =
         (data.usageMetadata?.candidatesTokenCount ?? economics.estimateTokens(text)) +
         (data.usageMetadata?.thoughtsTokenCount ?? 0);
+      const cachedTokens = data.usageMetadata?.cachedContentTokenCount ?? 0;
       economics.recordUsage(
         "gemini",
         model,
-        data.usageMetadata?.promptTokenCount ?? economics.estimateTokens(request.prompt),
-        outTokens
+        Math.max(0, (data.usageMetadata?.promptTokenCount ?? economics.estimateTokens(request.prompt)) - cachedTokens),
+        outTokens,
+        { readTokens: cachedTokens }
       );
 
       if (data.promptFeedback?.blockReason) {
@@ -353,7 +379,7 @@ export async function completeWithAstra<T = string>(
 
       let data: {
         choices?: Array<{ message?: { content?: string | null; refusal?: string | null }; finish_reason?: string }>;
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
+        usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
       };
       try {
         data = await postJson(request.label, config.astraBaseUrl, { Authorization: `Bearer ${config.astraApiKey}` }, body, config.requestTimeoutMs);
@@ -367,11 +393,14 @@ export async function completeWithAstra<T = string>(
 
       const choice = data.choices?.[0];
       const text = choice?.message?.content ?? "";
+      // OpenAI caches prompt prefixes on its own and counts the hits inside prompt_tokens.
+      const cachedTokens = data.usage?.prompt_tokens_details?.cached_tokens ?? 0;
       economics.recordUsage(
         "astra",
         model,
-        data.usage?.prompt_tokens ?? economics.estimateTokens(request.prompt),
-        data.usage?.completion_tokens ?? economics.estimateTokens(text)
+        Math.max(0, (data.usage?.prompt_tokens ?? economics.estimateTokens(request.prompt)) - cachedTokens),
+        data.usage?.completion_tokens ?? economics.estimateTokens(text),
+        { readTokens: cachedTokens }
       );
 
       if (choice?.message?.refusal) {

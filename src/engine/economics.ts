@@ -21,9 +21,32 @@ export interface TokenLedgerEntry {
   timestamp: string;
   provider: ModelProvider;
   model: string;
+  /** Input tokens billed at the full price (cached ones are counted separately). */
   promptTokens: number;
   completionTokens: number;
+  /** Input tokens served from the provider's prompt cache, at a fraction of the input price. */
+  cacheReadTokens: number;
+  /** Input tokens written to the cache (Claude bills these at 1.25x; other providers cache for free). */
+  cacheWriteTokens: number;
   costUsd: number;
+}
+
+/** What a cached input token costs as a fraction of a fresh one, per provider (TCA's alpha). */
+export function cacheReadDiscount(provider: ModelProvider, model: string): number {
+  if (provider === "claude") return 0.1;
+  if (provider === "gemini") return 0.25;
+  if (provider === "astra" || provider === "openai") return /gpt-4o|gpt-4\.1/i.test(model) ? 0.5 : 0.1;
+  return 1.0;
+}
+
+/** Writing to the cache costs extra on Claude only (5-minute cache: 1.25x the input price). */
+export function cacheWriteMultiplier(provider: ModelProvider): number {
+  return provider === "claude" ? 1.25 : 0;
+}
+
+export interface CacheUsage {
+  readTokens?: number;
+  writeTokens?: number;
 }
 
 export interface FreezeDumpState {
@@ -137,6 +160,7 @@ export class EconomicsEngine {
   private totalSpentUsd = 0;
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
+  private totalCachedTokens = 0;
   private ledger: TokenLedgerEntry[] = [];
   private activeContext: Record<string, unknown> = {};
   private moduleScope: ModuleBudgetScope | null = null;
@@ -207,14 +231,26 @@ export class EconomicsEngine {
     }
   }
 
+  /**
+   * Records one completion. `promptTokens` are the input tokens billed in full; cached input tokens go in `cache`
+   * (Claude reports them apart from input_tokens; OpenAI and Gemini include them in the prompt count, so their
+   * callers subtract them first).
+   */
   public recordUsage(
     provider: ModelProvider,
     model: string,
     promptTokens: number,
-    completionTokens: number
+    completionTokens: number,
+    cache: CacheUsage = {}
   ): TokenLedgerEntry {
     const pricing = resolvePricing(provider, model);
-    const inputCost = (promptTokens / 1_000_000) * pricing.inputCostPerMillionUsd;
+    const cacheReadTokens = Math.max(0, cache.readTokens ?? 0);
+    const cacheWriteTokens = Math.max(0, cache.writeTokens ?? 0);
+    const perInput = pricing.inputCostPerMillionUsd / 1_000_000;
+    const inputCost =
+      promptTokens * perInput +
+      cacheReadTokens * perInput * cacheReadDiscount(provider, model) +
+      cacheWriteTokens * perInput * cacheWriteMultiplier(provider);
     const outputCost = (completionTokens / 1_000_000) * pricing.outputCostPerMillionUsd;
     const costUsd = inputCost + outputCost;
 
@@ -224,13 +260,16 @@ export class EconomicsEngine {
       model,
       promptTokens,
       completionTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
       costUsd
     };
 
     this.ledger.push(entry);
     this.totalSpentUsd += costUsd;
-    this.totalInputTokens += promptTokens;
+    this.totalInputTokens += promptTokens + cacheReadTokens + cacheWriteTokens;
     this.totalOutputTokens += completionTokens;
+    this.totalCachedTokens += cacheReadTokens;
 
     logger.updateState({
       spentUsd: this.totalSpentUsd,
@@ -241,12 +280,14 @@ export class EconomicsEngine {
       spentUsd: this.totalSpentUsd,
       limitUsd: this.maxBudgetUsd,
       inputTokens: this.totalInputTokens,
-      outputTokens: this.totalOutputTokens
+      outputTokens: this.totalOutputTokens,
+      cachedTokens: this.totalCachedTokens
     });
 
+    const cached = cacheReadTokens > 0 || cacheWriteTokens > 0 ? ` (cache: ${cacheReadTokens} read, ${cacheWriteTokens} written)` : "";
     logger.info(
       "Economics",
-      `${provider.toUpperCase()} (${model}): +${promptTokens}in/${completionTokens}out ($${costUsd.toFixed(
+      `${provider.toUpperCase()} (${model}): +${promptTokens}in/${completionTokens}out${cached} ($${costUsd.toFixed(
         4
       )}) | Total: $${this.totalSpentUsd.toFixed(4)}/$${this.maxBudgetUsd.toFixed(2)}`
     );
@@ -267,9 +308,9 @@ export class EconomicsEngine {
     return entry;
   }
 
-  /** Tokens recorded so far (thinking counts as output). */
-  public getTokenTotals(): { inputTokens: number; outputTokens: number } {
-    return { inputTokens: this.totalInputTokens, outputTokens: this.totalOutputTokens };
+  /** Tokens recorded so far (thinking counts as output; cached input tokens are part of inputTokens and listed again). */
+  public getTokenTotals(): { inputTokens: number; outputTokens: number; cachedTokens: number } {
+    return { inputTokens: this.totalInputTokens, outputTokens: this.totalOutputTokens, cachedTokens: this.totalCachedTokens };
   }
 
   public getTotalSpentUsd(): number {

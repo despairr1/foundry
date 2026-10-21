@@ -11,12 +11,13 @@ import { VectorDB } from "../memory/db";
 import { EmbeddingService } from "../memory/embeddings";
 import { MemoryRetriever } from "../memory/retriever";
 import { ClaudeArchitect, ModuleArchitectureContract, ModuleDependency } from "../swarm/claude_architect";
-import { GeminiAuditor } from "../swarm/gemini_auditor";
+import { GeminiAuditor, TestSuiteSpec } from "../swarm/gemini_auditor";
+import { ThrashDetector, describeEvidence, distillCounterexample, failureSignature, holdoutTestPath, patchSignature } from "./methods";
 import { AstraSynthesizer } from "../swarm/astra_synthesizer";
 import { harnessRunsWholeSuite } from "../swarm/harness";
 import { SandboxRunner } from "../sandbox/runner";
 import { MutationEngine } from "./mutation";
-import { TreeSearchEngine, BranchId, ArchitecturalBranchNode } from "./tree_search";
+import { TreeSearchEngine, BranchId, ArchitecturalBranchNode, BranchEvaluationMetrics } from "./tree_search";
 import { OuroborosMonitor } from "../singularity/ouroboros";
 import { GitManager } from "../utils/git";
 import { logger } from "../utils/logger";
@@ -81,6 +82,8 @@ interface ModuleRunContext {
   /** Every module converged earlier in this run; their tests must keep passing and stay untouched. */
   earlierModules: ModuleArchitectureContract[];
   episodicContext: string;
+  /** GEF: the module's hidden acceptance suite, kept out of every branch workspace; null when there is none. */
+  holdout: TestSuiteSpec | null;
 }
 
 interface ModuleSearchOutcome {
@@ -159,6 +162,8 @@ export class ConvergenceEngine {
   private treeSearch: TreeSearchEngine;
   private ouroboros: OuroborosMonitor;
   private diagParser: DiagnosticParser;
+  /** TCA: stops a branch that keeps producing the same failure or the same patch. */
+  private thrash: ThrashDetector;
   /** Folders the user blocked AI access to (Files pane): never read, never changed. */
   private accessRules: AccessRule[];
   /** Enabled skills (src/skills.ts), given to the models with the specification but kept out of language inference. */
@@ -187,6 +192,7 @@ export class ConvergenceEngine {
     this.treeSearch = new TreeSearchEngine(config.minMutationKillRatio);
     this.ouroboros = new OuroborosMonitor(config, this.astParser, this.patcher, this.economics);
     this.diagParser = new DiagnosticParser();
+    this.thrash = new ThrashDetector(config.thrashLimit);
     this.accessRules = loadAccessRules(accessRulesPath(config.foundryRootDir));
   }
 
@@ -265,6 +271,17 @@ export class ConvergenceEngine {
       const primaryLanguage = this.inferProjectLanguage(specification, initialCodeFiles);
       // The models see the skills with the spec; the language above comes from the user's words alone.
       const promptSpec = this.skills ? `${specification}\n\n${this.skills}` : specification;
+      // REA: on an existing codebase the models first get the evidence (manifests, tests, exported symbols).
+      const evidence = initialCodeFiles.size > 0 ? describeEvidence(initialFiles) : "";
+      if (evidence) {
+        logger.info("Convergence", `Existing code: ${initialCodeFiles.size} source file(s) surveyed before planning (REA recon).`);
+      }
+      if (!this.config.offlineMode && this.config.auditorProvider === this.config.writerProvider) {
+        logger.warn(
+          "Convergence",
+          `The auditor and the code writer are the same model (${this.config.auditorProvider}); tests and code written by one model check each other less than two would. Settings › AI models › Roles.`
+        );
+      }
 
       this.economics.setExecutionContext({
         targetDir: absTargetDir,
@@ -280,7 +297,8 @@ export class ConvergenceEngine {
           language: primaryLanguage,
           callGraphSummary: this.callGraph.summarizeGraphForContext(initialCodeFiles),
           episodicMemoryContext: await this.retriever.retrieveRelevantFixes(specification, primaryLanguage),
-          existingFiles: initialFiles
+          existingFiles: initialFiles,
+          evidence
         });
       } catch (err) {
         if (isBudgetError(err)) throw err;
@@ -318,12 +336,14 @@ export class ConvergenceEngine {
 
         const search = await this.convergeModule({
           specification: promptSpec,
+          evidence,
           plan,
           index,
           language: primaryLanguage,
           baseline,
           earlierModules: convergedContracts,
-          lspMultiplexer
+          lspMultiplexer,
+          absTargetDir
         });
         const identity = {
           moduleName: planned.moduleName,
@@ -422,12 +442,14 @@ export class ConvergenceEngine {
   /** Runs the three-branch search for one planned module, starting from the workspace earlier modules left. */
   private async convergeModule(params: {
     specification: string;
+    evidence: string;
     plan: ModuleArchitectureContract[];
     index: number;
     language: SupportedLanguage;
     baseline: Map<string, string>;
     earlierModules: ModuleArchitectureContract[];
     lspMultiplexer: LSPMultiplexer;
+    absTargetDir: string;
   }): Promise<ModuleSearchOutcome> {
     const planned = params.plan[params.index];
     const position = `${params.index + 1}/${params.plan.length}`;
@@ -435,6 +457,7 @@ export class ConvergenceEngine {
     // Forget the previous module's branches so getPartialProgress() never reports stale work.
     this.currentModule = planned;
     this.treeSearch.reset();
+    this.thrash.reset();
 
     // Recomputed per module so the architect sees the code earlier modules added.
     const callGraphSummary = this.callGraph.summarizeGraphForContext(this.codeFilesOf(params.baseline));
@@ -452,6 +475,7 @@ export class ConvergenceEngine {
         this.architect.designBranchArchitecture({
           branchId,
           specification: params.specification,
+          evidence: params.evidence,
           plan: params.plan,
           moduleIndex: params.index,
           language: params.language,
@@ -487,20 +511,32 @@ export class ConvergenceEngine {
       position,
       dependencies: planned.dependsOn.flatMap((name) => params.earlierModules.filter((m) => m.moduleName === name)),
       earlierModules: params.earlierModules,
-      episodicContext
+      episodicContext,
+      holdout: null
     };
 
     this.treeSearch.initializeBranches(branchContracts, params.baseline);
     const moduleRef = { module: planned.moduleName, moduleIndex: params.index + 1, moduleCount: params.plan.length };
     emitProgress({ type: "phase", phase: "testing", ...moduleRef });
 
-    const suites = await Promise.allSettled(
-      this.treeSearch
-        .getActiveBranches()
-        .map((branch) =>
-          this.auditor.generateMutationLethalTests(branch.contract, undefined, this.dependencySources(context, params.baseline))
-        )
-    );
+    // The visible suites (one per branch) and the hidden suite (one per module, from the planned contract every
+    // branch must keep) are written together, before any code exists.
+    const holdoutPath = this.config.holdoutTests ? holdoutTestPath(planned.testFilePath, planned.language, planned.targetFilePath) : null;
+    const [suites, holdout] = await Promise.all([
+      Promise.allSettled(
+        this.treeSearch
+          .getActiveBranches()
+          .map((branch) =>
+            this.auditor.generateMutationLethalTests(branch.contract, undefined, this.dependencySources(context, params.baseline))
+          )
+      ),
+      holdoutPath
+        ? this.auditor.generateHoldoutTests(planned, holdoutPath, this.dependencySources(context, params.baseline)).then(
+            (suite) => ({ status: "fulfilled" as const, value: suite }),
+            (reason: unknown) => ({ status: "rejected" as const, reason })
+          )
+        : Promise.resolve(null)
+    ]);
     this.treeSearch.getActiveBranches().forEach((branch, idx) => {
       const result = suites[idx];
       if (result.status === "fulfilled") {
@@ -511,7 +547,42 @@ export class ConvergenceEngine {
         this.treeSearch.pruneBranch(branch.branchId, `test generation failed: ${errorMessage(result.reason)}`);
       }
     });
+    if (holdout) {
+      if (holdout.status === "fulfilled") {
+        context.holdout = holdout.value;
+        logger.info("Convergence", `Hidden acceptance suite written for ${planned.moduleName} (${holdout.value.testFilePath}); the code writer never sees it.`);
+      } else {
+        if (isBudgetError(holdout.reason)) throw holdout.reason;
+        logger.warn("Convergence", `No hidden acceptance suite for ${planned.moduleName}: ${errorMessage(holdout.reason)}`);
+      }
+    } else if (this.config.holdoutTests && !holdoutPath) {
+      logger.info("Convergence", `No hidden acceptance suite for ${planned.moduleName}: the ${planned.language} harness cannot run a second test file here.`);
+    }
 
+    try {
+      return await this.searchBranches(params, context, moduleRef);
+    } finally {
+      this.saveHoldoutSuite(params.absTargetDir, context.holdout);
+    }
+  }
+
+  /** Keeps the hidden suite under .foundry/holdout/ for the user to read; it is never part of the workspace. */
+  private saveHoldoutSuite(absTargetDir: string, holdout: TestSuiteSpec | null): void {
+    if (!holdout) return;
+    try {
+      const file = resolveInsideRoot(path.join(absTargetDir, ".foundry", "holdout"), holdout.testFilePath);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, holdout.testCode, "utf8");
+    } catch (err) {
+      logger.warn("Convergence", `Could not save the hidden suite: ${errorMessage(err)}`);
+    }
+  }
+
+  private async searchBranches(
+    params: { plan: ModuleArchitectureContract[]; index: number; lspMultiplexer: LSPMultiplexer },
+    context: ModuleRunContext,
+    moduleRef: { module: string; moduleIndex: number; moduleCount: number }
+  ): Promise<ModuleSearchOutcome> {
     let iterations = 0;
     for (let iteration = 1; iteration <= this.config.maxConvergenceIterations; iteration += 1) {
       await this.ouroboros.checkAndSelfModifyIfNeeded();
@@ -615,10 +686,30 @@ export class ConvergenceEngine {
     updatedFiles.set(testSuite.testFilePath, testSuite.testCode);
     const withNotes = (text: string): string => (notes.length > 0 ? `${notes.join("\n")}\n\n${text}` : text);
 
+    /**
+     * A failed step: the folded counterexample goes into the branch's history as the next attempt's feedback, and the
+     * thrash detector (TCA) compares it with the attempts before. One short of the limit the writer is told to change
+     * course; at the limit the branch is abandoned.
+     */
+    const fail = (metrics: BranchEvaluationMetrics, kind: string, counterexample: string): void => {
+      const verdict = this.thrash.record(branch.branchId, failureSignature(`${kind}\n${counterexample}`), patchSignature(allowedPatches));
+      let feedback = withNotes(counterexample);
+      if (verdict.escalate) {
+        const distinct = Array.from(new Set(branch.failureHistory.map((f) => failureSignature(f)))).length;
+        feedback =
+          `STALLED: ${verdict.reason}. The approach so far does not work; do not resubmit it with small edits. ` +
+          `Re-read the contract and the failing assertion, question the assumption behind the current code, and change the design ` +
+          `(so far ${distinct} distinct failure${distinct === 1 ? "" : "s"} over ${branch.failureHistory.length + 1} attempts).\n\n${feedback}`;
+        logger.warn("Convergence", `Branch ${branch.branchId} is stalling on ${contract.moduleName}: ${verdict.reason}.`);
+      }
+      this.treeSearch.recordBranchStep(branch.branchId, metrics, updatedFiles, allowedPatches, feedback);
+      if (verdict.stalled) this.treeSearch.pruneBranch(branch.branchId, `stalled: ${verdict.reason}`);
+    };
+
     const patchedTargetCode = updatedFiles.get(contract.targetFilePath) ?? "";
     const lspFrames = await lspMultiplexer.validateFile(contract.targetFilePath, patchedTargetCode, updatedFiles);
     const lspErrors = lspFrames.filter((f) => f.severity === "ERROR");
-    const baseMetrics = {
+    const baseMetrics: BranchEvaluationMetrics = {
       lspDiagnosticLatencyMs: lspMultiplexer.getLastLatencyMs(),
       lspErrorCount: lspErrors.length,
       sandboxPassed: false,
@@ -627,27 +718,41 @@ export class ConvergenceEngine {
     };
 
     if (lspErrors.length > 0) {
-      this.treeSearch.recordBranchStep(
-        branch.branchId,
-        baseMetrics,
-        updatedFiles,
-        allowedPatches,
-        withNotes(this.diagParser.formatFramesForPrompt(lspErrors))
-      );
+      fail(baseMetrics, "lsp", this.diagParser.formatFramesForPrompt(lspErrors));
       return;
     }
 
     emitProgress({ type: "phase", phase: "checking", module: contract.moduleName, attempt: iteration });
     const sandboxResult = await this.sandbox.executeWorkspaceTests(updatedFiles, contract.language, testSuite.testFilePath);
     if (!sandboxResult.passed) {
-      this.treeSearch.recordBranchStep(branch.branchId, baseMetrics, updatedFiles, allowedPatches, withNotes(sandboxResult.summaryText));
+      fail(baseMetrics, "tests", distillCounterexample(sandboxResult.summaryText));
       return;
     }
 
     const regression = await this.runEarlierModuleSuites(updatedFiles, context.earlierModules);
     if (regression) {
-      this.treeSearch.recordBranchStep(branch.branchId, baseMetrics, updatedFiles, allowedPatches, withNotes(regression));
+      fail(baseMetrics, "regression", regression);
       return;
+    }
+
+    // GEF holdout gate: the hidden suite runs on a copy of the workspace, so the writer never gets to read it;
+    // only the shrunken counterexample goes back.
+    let holdoutPassed: boolean | null = null;
+    if (context.holdout) {
+      const withHoldout = new Map(updatedFiles);
+      withHoldout.set(context.holdout.testFilePath, context.holdout.testCode);
+      const holdoutResult = await this.sandbox.executeWorkspaceTests(withHoldout, contract.language, context.holdout.testFilePath);
+      holdoutPassed = holdoutResult.passed;
+      if (!holdoutResult.passed) {
+        fail(
+          { ...baseMetrics, sandboxPassed: true, holdoutPassed: false },
+          "holdout",
+          `The visible tests pass, but the auditor's hidden acceptance suite for this contract does not. You cannot see that suite; ` +
+            `the failing assertions below are the counterexample. Fix the behavior they describe by re-reading the contract, not by guessing the tests.\n` +
+            distillCounterexample(holdoutResult.summaryText, 1800)
+        );
+        return;
+      }
     }
 
     const lethalityParams = {
@@ -682,12 +787,10 @@ export class ConvergenceEngine {
       // Hardened tests must still pass on the unmutated code; otherwise every mutant looks "killed".
       const recheck = await this.sandbox.executeWorkspaceTests(updatedFiles, contract.language, hardenedSuite.testFilePath);
       if (!recheck.passed) {
-        this.treeSearch.recordBranchStep(
-          branch.branchId,
-          baseMetrics,
-          updatedFiles,
-          allowedPatches,
-          withNotes(`The hardened test suite fails against the current implementation:\n${recheck.summaryText}`)
+        fail(
+          { ...baseMetrics, holdoutPassed },
+          "hardened",
+          `The hardened test suite fails against the current implementation:\n${distillCounterexample(recheck.summaryText)}`
         );
         return;
       }
@@ -697,18 +800,15 @@ export class ConvergenceEngine {
       });
     }
 
-    this.treeSearch.recordBranchStep(
-      branch.branchId,
-      { ...baseMetrics, sandboxPassed: true, mutationKillRatio: mutationReport.killRatio },
-      updatedFiles,
-      allowedPatches,
-      mutationReport.passedLethalityThreshold
-        ? undefined
-        : withNotes(
-            `Tests pass, but ${mutationReport.survivedMutants}/${mutationReport.totalMutants} mutants survived:\n${mutationReport.survivorDescriptions.join(
-              "\n"
-            )}`
-          )
+    const finalMetrics: BranchEvaluationMetrics = { ...baseMetrics, sandboxPassed: true, mutationKillRatio: mutationReport.killRatio, holdoutPassed };
+    if (mutationReport.passedLethalityThreshold) {
+      this.treeSearch.recordBranchStep(branch.branchId, finalMetrics, updatedFiles, allowedPatches);
+      return;
+    }
+    fail(
+      finalMetrics,
+      "mutation",
+      `Tests pass, but ${mutationReport.survivedMutants}/${mutationReport.totalMutants} mutants survived:\n${mutationReport.survivorDescriptions.join("\n")}`
     );
   }
 
@@ -725,7 +825,7 @@ export class ConvergenceEngine {
       if (harnessRunsWholeSuite(earlier.language)) continue;
       const result = await this.sandbox.executeWorkspaceTests(files, earlier.language, earlier.testFilePath);
       if (!result.passed) {
-        return `Regression: the tests of earlier module "${earlier.moduleName}" (${earlier.testFilePath}) now fail:\n${result.summaryText}`;
+        return `Regression: the tests of earlier module "${earlier.moduleName}" (${earlier.testFilePath}) now fail:\n${distillCounterexample(result.summaryText)}`;
       }
     }
     return null;

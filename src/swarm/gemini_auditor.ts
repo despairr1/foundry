@@ -27,6 +27,37 @@ export class GeminiAuditor {
     this.economics = economics;
   }
 
+  /** The stable part of an auditor prompt for a module (cached across the public, hardened and hidden suites). */
+  private moduleContext(contract: ModuleArchitectureContract, testFilePath: string, dependencies: ModuleDependency[]): string {
+    return [
+      `You are the Invariant Auditor of an autonomous software engineering engine. You write the tests; a separate code writer implements the module, and it never sees the tests before they run.`,
+      `Module "${contract.moduleName}" (${contract.language}). Implementation path: ${contract.targetFilePath}. Test file path: ${testFilePath}`,
+      `Formal contract:\n${JSON.stringify(contract, null, 2)}`,
+      `Test harness:\n${describeTestHarness(contract.language, contract.targetFilePath, testFilePath)}`,
+      ...(dependencies.length > 0
+        ? [
+            `This module builds on earlier modules that are already implemented and verified. Test this module's own contract, using the dependencies' real behavior when computing expected values:\n${describeModuleDependencies(
+              dependencies
+            )}`
+          ]
+        : []),
+      `Test only behavior the contract specifies. Return the complete test file in a single fenced code block and nothing else.`
+    ].join("\n\n");
+  }
+
+  private async requestSuite(label: string, system: string, prompt: string): Promise<string> {
+    return completeWithProvider<string>(this.config.auditorProvider, this.config, this.economics, {
+      label,
+      system,
+      prompt,
+      parse: (text) => {
+        const code = stripMarkdownCodeFences(text);
+        if (!code) throw new Error("The auditor returned an empty test suite");
+        return code;
+      }
+    });
+  }
+
   public async generateMutationLethalTests(
     contract: ModuleArchitectureContract,
     feedbackFromMutationEngine?: string,
@@ -37,38 +68,110 @@ export class GeminiAuditor {
     }
 
     const prompt = [
-      `You are the Invariant Auditor of an autonomous software engineering engine.`,
-      `Write property-based and boundary tests for module "${contract.moduleName}" (${contract.language}) that will kill operator-inversion, constant-perturbation, and guard-deletion mutants.`,
-      `Implementation path: ${contract.targetFilePath}`,
-      `Test file path: ${contract.testFilePath}`,
-      `Formal contract:\n${JSON.stringify(contract, null, 2)}`,
-      `Test harness:\n${describeTestHarness(contract.language, contract.targetFilePath, contract.testFilePath)}`,
-      ...(dependencies.length > 0
-        ? [
-            `This module builds on earlier modules that are already implemented and verified. Test this module's own contract, using the dependencies' real behavior when computing expected values:\n${describeModuleDependencies(
-              dependencies
-            )}`
-          ]
-        : []),
+      `Write property-based and boundary tests that will kill operator-inversion, constant-perturbation, and guard-deletion mutants.`,
       feedbackFromMutationEngine
         ? `These mutants survived the previous suite. Add assertions that fail on each of them while still passing on a correct implementation:\n${feedbackFromMutationEngine}`
-        : `Use exact-value assertions at every boundary named in the contract (including just inside and just outside each limit), and assert that every precondition violation is rejected.`,
-      `Test only behavior the contract specifies. Return the complete test file in a single fenced code block and nothing else.`
+        : `Use exact-value assertions at every boundary named in the contract (including just inside and just outside each limit), and assert that every precondition violation is rejected.`
     ].join("\n\n");
 
-    const testCode = await completeWithProvider<string>(this.config.auditorProvider, this.config, this.economics, {
-      label: `GeminiAuditor[${contract.moduleName}]`,
-      prompt,
-      parse: (text) => {
-        const code = stripMarkdownCodeFences(text);
-        if (!code) throw new Error("Gemini returned an empty test suite");
-        return code;
-      }
-    });
+    const testCode = await this.requestSuite(
+      `GeminiAuditor[${contract.moduleName}]`,
+      this.moduleContext(contract, contract.testFilePath, dependencies),
+      prompt
+    );
 
     return {
       moduleName: contract.moduleName,
       testFilePath: contract.testFilePath,
+      testCode,
+      targetedInvariants: contract.boundaryInvariants
+    };
+  }
+
+  /**
+   * GEF's holdout workload: a second, hidden acceptance suite for the module. The code writer never sees it (it is
+   * kept out of every branch workspace), so passing it means the contract was met, not that the visible tests were
+   * fitted. On a failure only the shrunken counterexample goes back to the writer.
+   */
+  public async generateHoldoutTests(
+    contract: ModuleArchitectureContract,
+    holdoutFilePath: string,
+    dependencies: ModuleDependency[] = []
+  ): Promise<TestSuiteSpec> {
+    if (this.config.offlineMode) {
+      return this.buildDeterministicHoldoutSuite(contract, holdoutFilePath, dependencies);
+    }
+
+    const prompt = [
+      `Write the HIDDEN acceptance suite for this module. It is kept from the code writer, which only ever sees a visible suite of boundary tests, so it must catch an implementation that fits those obvious cases without meeting the contract.`,
+      `Exercise the public API the way its real callers would: realistic end-to-end workloads, sequences of calls, representative and awkward inputs (empty, large, unicode, repeated, out of order), and values that are not the textbook boundary numbers. Derive every expected value from the contract alone, never from an implementation you imagine.`,
+      `Do not test implementation details, performance, or anything the contract leaves open. Keep it deterministic (no network, clock or randomness without a fixed seed), and give each assertion a message that names the expectation.`
+    ].join("\n\n");
+
+    const testCode = await this.requestSuite(
+      `GeminiAuditor[${contract.moduleName}:holdout]`,
+      this.moduleContext(contract, holdoutFilePath, dependencies),
+      prompt
+    );
+
+    return {
+      moduleName: contract.moduleName,
+      testFilePath: holdoutFilePath,
+      testCode,
+      targetedInvariants: contract.boundaryInvariants
+    };
+  }
+
+  /** Offline holdout suite: the same contract as the visible suite, probed at other values. */
+  private buildDeterministicHoldoutSuite(
+    contract: ModuleArchitectureContract,
+    holdoutFilePath: string,
+    dependencies: ModuleDependency[]
+  ): TestSuiteSpec {
+    const symbol = contract.contracts[0]?.symbolName ?? "execute_core_pipeline";
+    const dependency = dependencies[0]?.contract;
+    const dependencySymbol = dependency?.contracts[0]?.symbolName;
+    let testCode = "";
+
+    if (contract.language === "typescript") {
+      const importLines = [
+        `import * as assert from "assert";`,
+        `import { ${symbol} } from "${typescriptImportPath(holdoutFilePath, contract.targetFilePath)}";`,
+        ...(dependency && dependencySymbol
+          ? [`import { ${dependencySymbol} } from "${typescriptImportPath(holdoutFilePath, dependency.targetFilePath)}";`]
+          : [])
+      ];
+      const checks =
+        dependency && dependencySymbol
+          ? [
+              `  for (const input of [3, 7, 42]) {`,
+              `    assert.strictEqual(${symbol}(input), ${dependencySymbol}(input) + ${dependencySymbol}(input + 1), "hidden: composition at " + input);`,
+              `  }`
+            ]
+          : [
+              `  assert.strictEqual(${symbol}(3), 7, "hidden: 2*3 + 1");`,
+              `  assert.strictEqual(${symbol}(100), 201, "hidden: 2*100 + 1");`,
+              `  assert.throws(() => ${symbol}(-7), "hidden: negative input must be rejected");`
+            ];
+      testCode = [...importLines, ``, `export function runHiddenSuite(): void {`, ...checks, `}`, ``, `runHiddenSuite();`].join("\n");
+    } else if (contract.language === "python") {
+      const importLines = [
+        `import pytest`,
+        `from ${pythonModulePath(contract.targetFilePath)} import ${symbol}`,
+        ...(dependency && dependencySymbol ? [`from ${pythonModulePath(dependency.targetFilePath)} import ${dependencySymbol}`] : [])
+      ];
+      const checks =
+        dependency && dependencySymbol
+          ? [`    for value in [3, 7, 42]:`, `        assert ${symbol}(value) == ${dependencySymbol}(value) + ${dependencySymbol}(value + 1)`]
+          : [`    assert ${symbol}(3) == 7`, `    assert ${symbol}(100) == 201`, `    with pytest.raises(ValueError):`, `        ${symbol}(-7)`];
+      testCode = [...importLines, ``, `def test_hidden_acceptance():`, ...checks].join("\n");
+    } else {
+      testCode = `// Hidden suite for ${symbol}`;
+    }
+
+    return {
+      moduleName: contract.moduleName,
+      testFilePath: holdoutFilePath,
       testCode,
       targetedInvariants: contract.boundaryInvariants
     };
